@@ -1,0 +1,30 @@
+{
+  "name": "chat-demo-mobile",
+  "version": "0.1.1",
+  "private": true,
+  "type": "module",
+  "description": "把 chat-demo 静态应用封装为可在 HarmonyOS 4.3 侧载安装的 APK（Capacitor 壳）。",
+  "license": "MIT",
+  "scripts": {
+    "web:install": "node scripts/prepare-web.mjs --install",
+    "web:prepare": "node scripts/prepare-web.mjs",
+    "build:web": "node scripts/build-web.mjs",
+    "cap:sync": "node scripts/cap-sync.mjs",
+    "android:debug": "node scripts/build-apk.mjs --debug",
+    "android:release": "node scripts/build-apk.mjs --release",
+    "keystore": "node scripts/make-keystore.mjs",
+    "icons": "node scripts/make-icons.mjs",
+    "pwa": "node scripts/build-pwa.mjs",
+    "verify": "node scripts/verify.mjs",
+    "test:import": "node scripts/test-import.mjs",
+    "accept": "node scripts/accept.mjs"
+  },
+  "dependencies": {
+    "@capacitor/android": "8.6.2",
+    "@capacitor/core": "8.6.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.6.2",
+    "typescript": "5.9.3"
+  }
+}

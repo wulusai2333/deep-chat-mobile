@@ -1,0 +1,39 @@
+# 依赖
+node_modules/
+web/node_modules/
+
+# 上游 chat-demo 的 vendored 副本：由 `pnpm web:install` 自动 clone 到钉住的 commit。
+# 不入库的原因：它自带 .git，直接入库会变成一个没有 .gitmodules 的 gitlink
+# （别人 clone 下来只会得到一个空目录），而它的内容本来就该由脚本重建。
+# 我们的所有改动都在 web-patches/ + scripts/prepare-web.mjs 里，可完整重放。
+web/
+
+# 构建产物
+dist/
+dist-apk/
+pwa-dist/
+web/dist/
+
+# 测试与验收的临时现场（Chrome profile、测试 bundle）
+.tmp/
+
+# Android 构建中间产物（android/ 本身要入库，只有 Gradle 产物忽略）
+android/.gradle/
+android/build/
+android/app/build/
+android/capacitor-cordova-android-plugins/build/
+android/local.properties
+android/app/release/
+android/app/debug/
+native/*/build/
+
+# 签名与密钥：绝不入库
+*.keystore
+*.jks
+keystore.properties
+!docs/keystore.example.properties
+
+# 系统
+.DS_Store
+Thumbs.db
+*.log

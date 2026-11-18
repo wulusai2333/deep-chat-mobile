@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  数据提取规则（Android 12 / API 31+）。
+
+  为什么还需要这个文件：从 API 31 起，系统判断「能不能备份」优先看
+  android:dataExtractionRules，而 allowBackup 只作为旧系统的兜底。两处都写，
+  才能保证新老系统一致地不备份。
+
+  这里对 cloud-backup 和 device-transfer 都只留一个空 <exclude> 全排策略：
+  不导出任何文件。理由同 manifest 里的注释 —— Keystore 主密钥不可迁移，
+  备份出去只会得到一个永久无法解密的密文，既无意义又增加攻击面。
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <!-- 不备份任何内容 -->
+        <exclude domain="root" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="external" path="." />
+    </cloud-backup>
+    <device-transfer>
+        <!-- 换机也不迁移：Key 与历史会话理应留在原设备 -->
+        <exclude domain="root" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="external" path="." />
+    </device-transfer>
+</data-extraction-rules>

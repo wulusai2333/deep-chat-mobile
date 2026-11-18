@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  FileProvider 路径白名单。
+
+  为什么要收紧：Capacitor 生成的默认值是 <external-path path="." />，
+  等于把整个外部存储暴露给任何拿到 FileProvider URI 的应用。本项目保存备份
+  走 MediaStore、导入走 SAF，**不需要** FileProvider 共享外部存储。
+
+  只保留 cache：将来若要把某个临时文件通过 ACTION_SEND 分享出去，cache 足够，
+  且 cache 被系统清理不影响用户数据。
+-->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <cache-path name="chatdemo_cache" path="." />
+</paths>

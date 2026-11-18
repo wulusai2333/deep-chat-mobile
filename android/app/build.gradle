@@ -1,0 +1,120 @@
+apply plugin: 'com.android.application'
+
+android {
+    namespace = "com.example.chatdemo"
+    compileSdk = rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "com.example.chatdemo"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        // 版本号由 scripts/build-apk.mjs 从 package.json 注入，避免两处手改不同步
+        versionCode project.findProperty('chatdemoVersionCode')?.toInteger() ?: 1
+        versionName project.findProperty('chatdemoVersionName') ?: "0.1.1"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+        // 只保留中文与英文资源，减小 APK，也避免系统语言落到未翻译的 locale
+        resourceConfigurations += ['zh', 'en']
+    }
+
+    /**
+     * 签名配置从 keystore.properties 读，而不是硬编码在 gradle 里。
+     * keystore.properties 已在 .gitignore 中排除 —— 私钥与口令绝不进版本库。
+     * 文件不存在时 release 构建**不带签名**（仍可产出未签名 APK 用于验证编译），
+     * 由 scripts/build-apk.mjs 在需要时提示先生成 keystore。
+     */
+    def keystorePropertiesFile = rootProject.file("keystore.properties")
+    def keystoreProperties = new Properties()
+    if (keystorePropertiesFile.exists()) {
+        keystorePropertiesFile.withInputStream { keystoreProperties.load(it) }
+    }
+
+    signingConfigs {
+        if (keystorePropertiesFile.exists()) {
+            release {
+                storeFile rootProject.file(keystoreProperties['storeFile'])
+                storePassword keystoreProperties['storePassword']
+                keyAlias keystoreProperties['keyAlias']
+                keyPassword keystoreProperties['keyPassword']
+                // 两种签名方案都开：API 24–27 需要 v1，28+ 用 v2/v3；
+                // 只开 v2 会导致旧设备安装失败
+                enableV1Signing true
+                enableV2Signing true
+                enableV3Signing true
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            // 调试包也禁止明文，避免「debug 能跑 release 不行」这类环境差异
+            applicationIdSuffix ""
+            versionNameSuffix "-debug"
+        }
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (keystorePropertiesFile.exists()) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+
+    /**
+     * 产物命名：chat-demo-<version>-<buildType>.apk
+     * 默认名字是 app-release.apk，装多版本时无法区分，也会在多次构建间互相覆盖。
+     */
+    applicationVariants.all { variant ->
+        variant.outputs.all { output ->
+            def version = variant.versionName
+            outputFileName = "chat-demo-${version}-${variant.buildType.name}.apk"
+        }
+    }
+
+    packagingOptions {
+        // 只保留一种 META-INF 许可证，避免重复文件导致构建失败
+        resources {
+            excludes += ['META-INF/DEPENDENCIES', 'META-INF/LICENSE*', 'META-INF/NOTICE*']
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+    // API Key 加密存储的核心依赖：EncryptedSharedPreferences + MasterKey（Keystore）
+    // 版本固定在 1.1.0-alpha06：它在 API 24–36 上验证可用，且仍提供 EncryptedSharedPreferences
+    implementation "androidx.security:security-crypto:1.1.0-alpha06"
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}

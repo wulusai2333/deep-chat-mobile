@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  网络安全策略 —— 只信任系统 CA，且完全禁止明文。
+
+  为什么需要这个文件（而不是只靠 usesCleartextTraffic="false"）：
+  usesCleartextTraffic 只拦明文，不限制信任哪些 CA。默认配置下系统会信任
+  用户手动安装的 CA 证书 —— 在公司网络、抓包工具、恶意 Wi-Fi 门户场景里，
+  这意味着一个能装证书的攻击者可以做中间人解密 API 流量（含 API Key）。
+
+  所以这里用 base-config 显式声明 trust-anchors 只含 system，
+  把「用户安装的 CA」这条路彻底关掉。
+
+  代价（如实记录，不藏）：企业内网做 TLS 检查的环境下，本应用无法联网。
+  这是刻意的取舍 —— 这个应用的流量里包含 API Key，不接受任何中间人。
+
+  注意：这条策略不影响 WebView 加载 https://localhost 的本地资源
+  （本地资源不走网络栈），也不影响 SAF 文件选择器。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <!-- 只信任系统预置 CA -->
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <!--
+      显式禁止对 api.deepseek.com 的例外（即使是明文或用户 CA）。
+      写出来是为了让「这里没有例外」在代码里可见，而不是靠默认值隐式成立。
+    -->
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">api.deepseek.com</domain>
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </domain-config>
+</network-security-config>

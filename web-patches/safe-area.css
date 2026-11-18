@@ -1,0 +1,79 @@
+/**
+ * 安全区补丁 —— web-patches/safe-area.css
+ *
+ * 【为什么要这个文件】
+ * 上游 `src/index.html` 的 viewport meta 是 `width=device-width,initial-scale=1`，没有
+ * `viewport-fit=cover`。没有它，WebView 不会把内容延伸到刘海/挖孔区域，`env(safe-area-inset-*)`
+ * 一律为 0；加上它之后内容全屏，就必须自己避让系统栏，否则顶栏会压在状态栏/挖孔下面。
+ * 鸿蒙 4.3 的 Mate 70 Pro+ 顶部有挖孔，必须处理。
+ *
+ * 【为什么不直接改上游 CSS】
+ * 硬性约束 §3.5：不改上游 UI。安全区属于「壳」的职责，所以单独放在一个外部样式表里，
+ * 由壳在页面加载最早期注入。上游升级时这个文件不需要重放。
+ *
+ * 【注入时机】
+ * 必须在首屏渲染前生效，否则会看到一次「顶栏跳动」。因此壳在 `document.head` 一出现就插入
+ * `<link>`，而不是等 React 挂载。
+ *
+ * ── 为什么这个文件这么小（只改一个元素） ────────────────────────────────
+ * 先把上游现状查清楚，避免重复劳动与双倍留白：
+ *
+ * 上游已经有 4 处安全区处理：
+ *   SessionView .inputContainer  padding-bottom: env(safe-area-inset-bottom)
+ *   Welcome    .welcome         padding: 0 16px env(safe-area-inset-bottom)
+ *   Settings   .content         padding-bottom: env(safe-area-inset-bottom)
+ *   Toast      .toast           top: calc(40px + env(safe-area-inset-top))
+ *
+ * 而 Capacitor 8 SystemBars（默认 insetsHandling: "css"）的行为分两档：
+ *   A 档：WebView 主版本 < 140，或页面没有 viewport-fit=cover
+ *         → 原生给 decorView 加 padding，整个 WebView 被挤进安全区；
+ *           同时把 --safe-area-inset-* 设成 "0px"，且 env() 也为 0。
+ *   B 档：WebView ≥ 140 且页面有 viewport-fit=cover
+ *         → 原生不给 decorView 加 padding，改把真实 inset 写进 --safe-area-inset-*，
+ *           同时 env() 也返回真实值。
+ *
+ * 结论：上游那 4 处 env() 在 A/B 两档下**都已经是对的**（A 档得 0、B 档得真实值），
+ * 不需要我们插手；额外再加一层反而会在 B 档叠成两倍，在纯浏览器下也可能叠。
+ *
+ * 唯一漏掉的是：`.frame`，也就是 App 的根容器。它在移动端是
+ * `position: fixed; inset: 0`（App.module.css 的 `@media not all and (min-width: 768px)`），
+ * 完全脱离文档流 —— 加在 body 上没有任何效果，只能直接给它加 padding。
+ * 它内部的 MobileHeader 顶栏因此会顶到状态栏下面。这才是真正需要补的缺口。
+ *
+ * ── 为什么用 var(--safe-area-inset-*) 而不是 env() ────────────────────────
+ * A 档下原生已经把 WebView 挤进安全区，此时若用 env()... 也是 0，看起来一样。
+ * 但 B 档下两者都是真实值，同样等价。用 var 的好处是留一个统一入口：
+ *   1) 纯浏览器/PWA 下 var 未定义 → 退回 env()，由 Chrome 自己算；
+ *   2) 将来若要微调（比如给某个机型加常数），只改 :root 一处。
+ *
+ * ── 为什么不硬编码 CSS Modules 哈希类名 ───────────────────────────────────
+ * 上游 `localIdentName: '[local]-[hash:6]'`，实际的类是 `.frame-_9fdf5`，哈希随构建变化
+ * （同一份源码里 `.content` 就有 6 个不同哈希）。写死会在下次升级时静默失效，
+ * 所以用 `[class*='frame-']` 匹配「本地名 + 短横线」。
+ * 这个选择器只命中 .frame-xxxxx（已核对：全站没有别的类名以 frame- 开头）。
+ */
+
+:root {
+  /* 全页统一的安全区入口：原生变量优先，纯浏览器下退回 env() */
+  --shell-inset-top: var(--safe-area-inset-top, env(safe-area-inset-top, 0px));
+  --shell-inset-right: var(--safe-area-inset-right, env(safe-area-inset-right, 0px));
+  --shell-inset-left: var(--safe-area-inset-left, env(safe-area-inset-left, 0px));
+}
+
+/*
+ * 只作用于移动端布局（与上游同一个断点）。
+ * 桌面端布局是 `position: absolute; inset: 0` 的三栏，浏览器窗口里没有挖孔，
+ * 加 padding 只会让侧栏和内容错位，所以桌面完全不动。
+ *
+ * 只加 top / left / right，不加 bottom：
+ * 底部已由上游 .inputContainer / .welcome / .content 的 env(safe-area-inset-bottom) 覆盖，
+ * 这里再加一次就是双倍留白（这是本项目最容易踩的坑，已在 docs/build.md 记录）。
+ */
+@media not all and (min-width: 768px) {
+  div[class*='frame-'] {
+    padding-top: var(--shell-inset-top);
+    padding-right: var(--shell-inset-right);
+    padding-left: var(--shell-inset-left);
+    box-sizing: border-box;
+  }
+}
