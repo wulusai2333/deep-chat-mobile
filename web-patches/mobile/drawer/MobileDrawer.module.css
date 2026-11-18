@@ -1,0 +1,288 @@
+/**
+ * 移动端抽屉面板样式 —— web-patches/mobile/drawer/MobileDrawer.module.css
+ *
+ * 数值口径见 docs/mobile-ui-spec.md §2.7：
+ *   搜索框 40px / 圆角 999 / --m-fill-strong；分组标题 15px 吸顶；
+ *   会话行 44px / 16px；底部账户行 64px + 安全区。
+ * 面板的宽度与定位在 overrides/sider/Sider.module.css（.drawer）。
+ */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  position: relative;
+  width: 100%;
+  height: 100%;
+  /* 顶部留白：.frame 已由 shell 补丁加了安全区 padding，这里只补一点视觉留白，
+     不要再叠加 env(safe-area-inset-top)，否则真机上会双倍 */
+  padding-top: 8px;
+  background-color: var(--m-page-bg);
+
+  /* 右侧轻阴影：主界面是白的，抽屉与它之间靠这条阴影区分。
+     - 外侧柔光（Lead 指定 2px 0 12px 0.06 一带）；
+     - 内侧再叠一条 18px 渐变，和官方截图一致（暗部落在抽屉内侧右缘）。
+     两者叠加后边缘处约 6% 黑，和参考图取色（239/255）一致。 */
+  box-shadow: 2px 0 14px rgba(0, 0, 0, 0.08);
+  --m-drawer-edge-shadow: rgba(0, 0, 0, 0.05);
+
+  [data-ds-dark-theme] & {
+    box-shadow: 2px 0 14px rgba(0, 0, 0, 0.45);
+    --m-drawer-edge-shadow: rgba(0, 0, 0, 0.35);
+  }
+}
+
+.panel::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 5;
+  width: 18px;
+  background: linear-gradient(to left, var(--m-drawer-edge-shadow), transparent);
+  pointer-events: none;
+}
+
+/* ── 搜索框 ─────────────────────────────────────────────────────────── */
+
+.searchWrap {
+  flex-shrink: 0;
+  padding: 16px 16px 0;
+}
+
+.search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  height: 44px;
+  padding: 0 8px 0 12px;
+  border-radius: 999px;
+  background-color: var(--m-fill-strong);
+  color: var(--m-text-secondary);
+}
+
+.searchIcon {
+  display: flex;
+  flex-shrink: 0;
+}
+
+.searchInput {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: none;
+  outline: none;
+  background: none;
+  font: inherit;
+  font-size: 15px;
+  line-height: 44px;
+  color: var(--m-text);
+  appearance: none;
+
+  &::placeholder {
+    /* 官方截图取的色约 #8f9094，和分组标题同色；--m-text-placeholder 偏浅，这里用次级文字色 */
+    color: var(--m-text-secondary);
+  }
+}
+
+.clearButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  color: var(--m-text-secondary);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+
+  &:active {
+    background-color: var(--m-fill-press);
+  }
+}
+
+/* ── 会话列表 ───────────────────────────────────────────────────────── */
+
+.list {
+  flex: 1;
+  min-height: 0;
+  padding: 0 16px 8px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+  }
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+}
+
+/* 吸顶分组标题；滚动时盖住下面的行。
+   padding-top 12 对应官方截图（上一行底 → 组标题文字约 11px）；
+   spec 初版估的 18 偏大，会显得分组之间太空。 */
+.sectionHeader {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 12px 4px 6px;
+  font-size: 15px;
+  line-height: 22px;
+  color: var(--m-text-secondary);
+  background-color: var(--m-page-bg);
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* 一行会话：47px、16px、单行省略；长按有底色反馈 */
+.row {
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  width: 100%;
+  height: 47px;
+  padding: 0 4px;
+  border-radius: 10px;
+  font-size: 16px;
+  color: var(--m-text);
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.rowTitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* 当前会话：品牌色文字 + 浅蓝底 */
+.rowActive {
+  color: var(--m-brand);
+  background-color: var(--m-brand-weak);
+}
+
+/* 按压 / 长按中的反馈 */
+.rowPressed {
+  background-color: var(--m-fill);
+}
+
+.rowActive.rowPressed {
+  background-color: var(--m-brand-weak-press);
+}
+
+.renameInput {
+  box-sizing: border-box;
+  width: 100%;
+  height: 47px;
+  padding: 0 4px;
+  border: 1px solid var(--m-brand);
+  border-radius: 10px;
+  outline: none;
+  background-color: var(--m-page-bg);
+  font: inherit;
+  font-size: 16px;
+  color: var(--m-text);
+}
+
+/* ── 搜索结果 ───────────────────────────────────────────────────────── */
+
+.results {
+  display: flex;
+  flex-direction: column;
+}
+
+.status {
+  padding: 20px 4px;
+  font-size: 15px;
+  line-height: 22px;
+  color: var(--m-text-secondary);
+  text-align: center;
+}
+
+/* ── 底部账户行 ─────────────────────────────────────────────────────── */
+
+.bottom {
+  flex-shrink: 0;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.accountRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  box-sizing: border-box;
+  height: 64px;
+  padding: 0 16px;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+
+  &:active {
+    background-color: var(--m-fill);
+  }
+}
+
+.avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background-color: var(--m-fill);
+  color: var(--m-text-secondary);
+}
+
+.accountName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 16px;
+  line-height: 22px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--m-text);
+}
+
+.menuSlot {
+  display: flex;
+  flex-shrink: 0;
+}
+
+.moreButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  color: var(--m-text-secondary);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+
+  &:active {
+    background-color: var(--m-fill-press);
+  }
+}

@@ -1,0 +1,112 @@
+.container {
+  position: absolute;
+  inset: 0;
+  display: flex;
+}
+
+.welcome {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: var(--message-list-max-width);
+  margin: auto;
+  padding: 0 32px 64px;
+}
+
+.greeting {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 21px;
+  font-size: 24px;
+  line-height: 32px;
+  font-weight: 600;
+  text-align: center;
+  color: var(--dsw-alias-label-primary);
+}
+
+@media (max-width: 439px) {
+  .greeting {
+    font-size: 20px;
+    line-height: 28px;
+    font-weight: 500;
+  }
+}
+
+@media not all and (min-width: 768px) {
+  .container {
+    flex-direction: column;
+  }
+
+  .welcome {
+    flex: 1;
+    min-height: 0;
+    justify-content: flex-end;
+    max-width: none;
+    margin: 0;
+    padding: 0 16px env(safe-area-inset-bottom);
+  }
+
+  .greeting {
+    flex-shrink: 0;
+    margin: auto 0;
+  }
+
+  .caveat {
+    flex-shrink: 0;
+    width: 100%;
+    padding: 6px 0;
+    font-size: 11px;
+    line-height: 16px;
+    text-align: center;
+    color: var(--dsw-alias-label-tertiary);
+    user-select: none;
+  }
+}
+
+/*
+ * ── 移动端（官方 App 风格）─────────────────────────────────────────────────
+ * 只在 < 768px 生效，且只有移动端分支会渲染这些类；桌面分支继续用上面的
+ * .container / .welcome / .greeting，一行都没动。
+ */
+.mobile {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--m-page-bg);
+}
+
+/* logo + 问候语：在顶栏与输入框之间的内容区居中（官方截图里偏上是因为底部输入框占位） */
+.mobileHero {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 0 24px;
+}
+
+.mobileLogo {
+  display: flex;
+  margin-bottom: 20px;
+  color: var(--m-brand);
+}
+
+.mobileGreeting {
+  font-size: 22px;
+  line-height: 30px;
+  font-weight: 600;
+  text-align: center;
+  color: var(--m-text);
+}
+
+.mobileComposer {
+  flex-shrink: 0;
+  width: 100%;
+  padding-bottom: env(safe-area-inset-bottom);
+}

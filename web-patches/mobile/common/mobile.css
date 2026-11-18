@@ -1,0 +1,72 @@
+/**
+ * 移动端 UI tokens 与全局细节 —— web-patches/mobile/common/mobile.css
+ *
+ * 只在移动端布局（< 768px，与上游同一断点）生效的视觉变量集中在这里。
+ * 组件自己的样式写各自的 *.module.css；这里只放「跨屏共享」的 token 和少量全局修正。
+ *
+ * 【为什么用 --m-* 前缀而不是复用 --dsw-*】
+ * 官方 App 的主色/圆角/阴影与桌面版设计系统不是一套：桌面是「浅灰描边 + 弱阴影」，
+ * 官方移动端是「白底大圆角 + 淡蓝药丸 + 更重的浮起阴影」。用独立 token 才能一处调、
+ * 且不会污染桌面端。深色主题下只覆盖 token 的值，组件不用写第二套样式。
+ */
+
+:root {
+  /* 品牌 */
+  --m-brand: #4d6bfe;
+  --m-brand-weak: rgba(77, 107, 254, 0.1);
+  --m-brand-weak-press: rgba(77, 107, 254, 0.18);
+
+  /* 文本 */
+  --m-text: #1a1a1a;
+  --m-text-secondary: #8a8f99;
+  --m-text-placeholder: #b0b4bd;
+  --m-text-inverted: #ffffff;
+
+  /* 面 */
+  --m-page-bg: #ffffff;
+  --m-composer-bg: #ffffff;
+  --m-composer-line: rgba(0, 0, 0, 0.05);
+  --m-composer-shadow: 0 2px 16px rgba(0, 0, 0, 0.08);
+  --m-line: rgba(0, 0, 0, 0.06);
+  --m-fill: #f5f6f7;
+  --m-fill-press: #eceef0;
+  --m-fill-strong: #f2f3f5;
+  --m-mask: rgba(0, 0, 0, 0.2);
+
+  /* 尺寸 */
+  --m-radius-composer: 26px;
+  --m-radius-tile: 16px;
+  --m-topbar-height: 60px;
+  --m-drawer-width: 84vw;
+  --m-ease: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+body[data-ds-dark-theme] {
+  --m-brand-weak: rgba(109, 134, 255, 0.16);
+  --m-brand-weak-press: rgba(109, 134, 255, 0.26);
+  --m-text: #e9e9ec;
+  --m-text-secondary: #9a9aa2;
+  --m-text-placeholder: #77777f;
+  --m-page-bg: #1a1a1e;
+  --m-composer-bg: #26262b;
+  --m-composer-line: rgba(255, 255, 255, 0.06);
+  --m-composer-shadow: 0 2px 16px rgba(0, 0, 0, 0.45);
+  --m-line: rgba(255, 255, 255, 0.08);
+  --m-fill: #303036;
+  --m-fill-press: #3a3a41;
+  --m-fill-strong: #2c2c31;
+  --m-mask: rgba(0, 0, 0, 0.5);
+}
+
+@media not all and (min-width: 768px) {
+  /* 官方 App 的页面底色是纯白/纯深，而不是桌面版的浅灰分层 */
+  body {
+    background-color: var(--m-page-bg);
+  }
+
+  /* 移动端列表左右留白：桌面 44px 在手机上太宽，官方约 16px。
+     只改消息列表的变量（global.css 定义在 :root），不动任何组件的桌面样式。 */
+  :root {
+    --message-list-padding-horizontal: 16px;
+  }
+}

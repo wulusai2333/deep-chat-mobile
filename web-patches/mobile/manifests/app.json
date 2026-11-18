@@ -1,0 +1,16 @@
+{
+  "area": "app",
+  "owner": "lead",
+  "overrides": [
+    {
+      "to": "src/app/App.tsx",
+      "from": "overrides/app/App.tsx",
+      "upstreamSha256": "3f03f825f8a201af427c02509962157922e666f2502574b6bfbdf87ab9008bd4"
+    },
+    {
+      "to": "src/app/App.module.css",
+      "from": "overrides/app/App.module.css",
+      "upstreamSha256": "23a469a66478fa31092d2cfa5878556bc84872ce37fa168c1cb71afbe80bd93d"
+    }
+  ]
+}

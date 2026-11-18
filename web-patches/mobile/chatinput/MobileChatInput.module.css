@@ -1,0 +1,282 @@
+/**
+ * 移动端输入框样式 —— web-patches/mobile/chatinput/MobileChatInput.module.css
+ *
+ * 尺寸以 docs/mobile-ui-spec.md §2.4–§2.6 为准（393px 视口）：
+ *   输入卡：左右 margin 10 / 圆角 26 / 白底 + 浮起阴影 + 1px 淡描边
+ *   输入区：padding 14 18 4、17px/24px、最少 1 行最多约 5 行
+ *   控制行：40px（+ 12px 底部内边距）、药丸 30px、右侧圆钮 30px
+ *   语音行：48px + 1px 分隔线（与普通态输入区同高，切模式时卡片不跳）
+ *
+ * 颜色一律走 mobile.css 的 --m-* token，深色主题由 token 覆盖。
+ */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  margin: 0 10px 10px;
+  border-radius: var(--m-radius-composer);
+  border: 1px solid var(--m-composer-line);
+  background: var(--m-composer-bg);
+  box-shadow: var(--m-composer-shadow);
+  overflow: hidden;
+  color: var(--m-text);
+  font-size: 17px;
+  line-height: 24px;
+}
+
+/* ── 输入区（mirror 撑高，textarea 绝对定位铺满） ─────────────────────────── */
+
+.textareaWrapper {
+  position: relative;
+  width: 100%;
+}
+
+.textarea,
+.mirror {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  /* 官方单行输入区实测约 50px（card 顶到控制行之间留 6px），比 48 多出的高度留在
+     文字下方；语音态大区同为 50px，切换时卡片高度与药丸位置都不跳。 */
+  min-height: 50px;
+  margin: 0;
+  padding: 14px 18px 4px;
+  border: none;
+  font: inherit;
+  line-height: 24px;
+  font-variant-ligatures: no-contextual;
+  word-break: break-word;
+  white-space: pre-wrap;
+  overflow: auto;
+}
+
+.textarea {
+  position: absolute;
+  inset: 0;
+  height: 100%;
+  resize: none;
+  outline: none;
+  overscroll-behavior: contain;
+  background: transparent;
+  color: var(--m-text);
+  caret-color: var(--m-brand);
+}
+
+.textarea::placeholder {
+  color: var(--m-text-placeholder);
+  user-select: none;
+}
+
+.textarea:disabled {
+  opacity: 0.6;
+}
+
+/* 约 5 行后内部滚动，卡片不再长高 */
+.mirror {
+  visibility: hidden;
+  pointer-events: none;
+  max-height: 138px;
+}
+
+.mirror::-webkit-scrollbar {
+  display: none;
+}
+
+/* ── 控制行 ──────────────────────────────────────────────────────────────── */
+
+.functionRow {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+  box-sizing: content-box;
+  height: 40px;
+  /* 输入区与控制行之间官方留 6px（普通态/语音态一致） */
+  margin-top: 6px;
+  padding: 0 14px 12px;
+}
+
+.toggles {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.collapsedToggles .toggleLabel {
+  display: none;
+}
+
+/* 深度思考 / 智能搜索药丸：未开淡蓝底蓝字，已开实心品牌蓝 */
+.toggle {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 999px;
+  background: var(--m-brand-weak);
+  color: var(--m-brand);
+  font: inherit;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition:
+    background 0.2s var(--m-ease),
+    color 0.2s var(--m-ease);
+}
+
+.toggle svg {
+  display: block;
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+}
+
+.toggle:active {
+  background: var(--m-brand-weak-press);
+}
+
+.toggle.selected {
+  background: var(--m-brand);
+  color: var(--m-text-inverted);
+}
+
+.right {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+}
+
+/* 30px 触控区的圆形图标按钮 */
+.iconButton {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--m-text);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition:
+    transform 120ms var(--m-ease),
+    opacity 120ms var(--m-ease);
+}
+
+.iconButton:active {
+  transform: scale(0.94);
+}
+
+.iconButton:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* 麦克风 / 关闭 / 键盘：24px 圆环（2px 描边，官方实测约 23.6px 直径） */
+.ringIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 24px;
+  height: 24px;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+}
+
+.sendButton {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--m-brand);
+  color: var(--m-text-inverted);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition:
+    transform 120ms var(--m-ease),
+    opacity 120ms var(--m-ease);
+}
+
+.sendButton:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.sendButtonDisabled {
+  opacity: 0.4;
+}
+
+/* ── 按住说话 ────────────────────────────────────────────────────────────── */
+
+.voiceRow {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  box-sizing: border-box;
+  /* 与普通态输入区同高（50）+ 1px 分隔线，切换模式时药丸不跳 */
+  height: 50px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--m-line);
+  color: var(--m-text);
+  font-size: 17px;
+  font-weight: 500;
+  line-height: 24px;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 160ms var(--m-ease);
+}
+
+.voiceRowHolding {
+  background: var(--m-brand-weak);
+}
+
+.voiceRowBusy {
+  cursor: default;
+}
+
+.voiceLabel {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.voiceTimer {
+  flex-shrink: 0;
+  color: var(--m-text-secondary);
+  font-size: 13px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}

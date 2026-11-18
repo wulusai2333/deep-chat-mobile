@@ -1,0 +1,13 @@
+# 发布签名证书指纹（apksigner verify --print-certs 输出的 SHA-256 digest）
+#
+# 【这个文件是硬约束，不是文档】
+# Android 用「包名 + 签名」判定是不是同一个应用。签名一变，已装的老版本就
+# 无法覆盖安装（INSTALL_FAILED_UPDATE_INCOMPATIBLE），用户只能卸载重装，
+# 本地会话全部丢失。
+#
+# scripts/build-apk.mjs 与 scripts/verify.mjs 都会把实际 APK 的证书指纹
+# 与本文件比对；不一致直接失败。换签名之前先读 docs/build.md §4。
+#
+# 注意：这里只有证书**指纹**（公开信息），没有私钥。私钥
+# android/deep-chat.keystore 只在本机 + 离线备份里，绝不入库。
+594829f66ba88b67f8c5b025c45aaa418b58ec31692cf35142c56071088d9401

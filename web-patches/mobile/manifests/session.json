@@ -1,0 +1,36 @@
+{
+  "area": "session",
+  "owner": "session",
+  "overrides": [
+    {
+      "to": "src/components/session/MobileHeader.tsx",
+      "from": "overrides/session/MobileHeader.tsx",
+      "upstreamSha256": "755ac3b12025e04487893a0be02663fd6dc15129a49a85e8a42f0d9cb6b8f336"
+    },
+    {
+      "to": "src/components/session/MobileHeader.module.css",
+      "from": "overrides/session/MobileHeader.module.css",
+      "upstreamSha256": "03b8d0d9c9a503e0f9464c0a867e9552350f4ad666c63da673c6fdfe8b3ff2d2"
+    },
+    {
+      "to": "src/components/session/Welcome.tsx",
+      "from": "overrides/session/Welcome.tsx",
+      "upstreamSha256": "c985c71f693f40c40b4b4e782727ef85d3b52997f58514441833b7981a0028c3"
+    },
+    {
+      "to": "src/components/session/Welcome.module.css",
+      "from": "overrides/session/Welcome.module.css",
+      "upstreamSha256": "c0a76302ff77c3e56f0ba1af37fc086c63abc0be545c90f3ff2951e926e446e2"
+    },
+    {
+      "to": "src/components/session/SessionView.tsx",
+      "from": "overrides/session/SessionView.tsx",
+      "upstreamSha256": "999f7e524294752a481aef947eac90e9d8eb762d50c190cc5cdf5e06cdc193bd"
+    },
+    {
+      "to": "src/components/session/SessionView.module.css",
+      "from": "overrides/session/SessionView.module.css",
+      "upstreamSha256": "5ef544433298bee1306eb2c07fa183658f2360dbd70dd849c8c0cd14a5afb579"
+    }
+  ]
+}

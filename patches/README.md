@@ -1,19 +1,24 @@
 # patches/ —— 对上游源码的改动镜像
 
-这里是**给人看的文档**，不是构建输入。真正的补丁逻辑在 `scripts/prepare-web.mjs`，
-它把 `web-patches/` 下的新文件复制进 `web/src/shell/`，再对这 10 个上游文件做 17 处锚点替换。
+这里是**给人看的文档**，不是构建输入。真正的补丁逻辑在 `scripts/prepare-web.mjs`：
+
+- **注入**：`web-patches/*.ts` → `web/src/shell/`，`web-patches/mobile/` → `web/src/mobile/`
+- **锚点补丁**：对上游文件做插入 / 精确替换，共 11 个上游文件、25 处；
+  `scripts/verify.mjs` 的 D 组用 20 个 `mobile-shell:` / `mobile-ui:` 标记守住这一点，
+  谁把补丁改回去，自检立刻失败
+- **整文件 fork**：移动端组件放 `web-patches/mobile/overrides/`，manifest 记录上游 `sha256` 基线，
+  上游一变就让 `prepare` 失败（详见 [`../docs/mobile-ui-spec.md`](../docs/mobile-ui-spec.md) §1）
 
 ## 为什么要有这个目录
 
 `prepare-web.mjs` 里的替换是**代码**：锚点字符串、插入内容、校验逻辑都在里面。
-读代码能知道「改了什么」，但读不出「为什么这么改」——而那些理由往往是
-踩过坑之后才明白的（例如 `MODIFY_AUDIO_SETTINGS`、`await shellReady` 的冷启动竞态）。
+读代码能知道「改了什么」，但读不出「为什么这么改」—— 而那些理由往往是踩过坑之后
+才明白的（例如 `MODIFY_AUDIO_SETTINGS`、`await shellReady` 的冷启动竞态、
+导入时 `getAll` 造成的 227 MB 堆峰值）。所以每个改动在这里有一份带完整理由的说明。
 
-所以每个改动在这里有一份带完整理由的说明。两处内容必须保持一致，
-`scripts/verify.mjs` 的 D 组用 17 个 `mobile-shell:` 标记守住这一点：
-任何人把补丁改回去，自检立刻失败。
+## 改动总览
 
-## 17 处改动总览
+### 壳层 / 功能（锚点补丁）
 
 | # | 上游文件 | 标记 | 说明文件 | 一句话理由 |
 | --- | --- | --- | --- | --- |
@@ -29,33 +34,48 @@
 | 10 | `src/services/settings.ts` | `api key setter` | [settings.ts](settings.ts) | 有加密桥时只写原生，**先 return** 不落明文 |
 | 11 | `src/services/chat/history/toLocal.ts` | `no toSorted` | [es2023-methods.ts](es2023-methods.ts) | ES2023 方法在老内核上是 undefined |
 | 12 | `src/services/chat/store.ts` | `no toReversed` | [es2023-methods.ts](es2023-methods.ts) | 同上 |
-| 13 | `src/services/chat/db.ts` | `merge staging helpers` | [db.merge.ts](db.merge.ts) | 合并导入需要 3 个暂存辅助函数 |
-| 14 | `src/services/chat/backup.ts` | `export snapshot` | [backup.ts](backup.ts) | 拆出不入队的导出，供导入前自动备份复用 |
+| 13 | `src/services/chat/db.ts` | `merge staging helpers` | [db.merge.ts](db.merge.ts) | 合并导入：复制现有数据进暂存、批量写会话、定向回填附件 MIME |
+| 14 | `src/services/chat/backup.ts` | `export snapshot` | [backup.ts](backup.ts) | 拆出不入队的导出，供导入前自动备份复用（备份改走分块原生桥） |
 | 15 | `src/services/chat/backup.ts` | `merge import` | [backup.ts](backup.ts) | 把「替换」改成「合并」 |
 | 16 | `src/components/chatInput/useVoiceInput.ts` | `mic guidance import` | [useVoiceInput.ts](useVoiceInput.ts) | 引入永久拒绝的引导 |
 | 17 | `src/components/chatInput/useVoiceInput.ts` | `mic guidance` | [useVoiceInput.ts](useVoiceInput.ts) | 仅 `NotAllowedError` 时问原生，其余照旧 |
+| 18 | `src/services/chat/history/zipReader.ts` | `count zip entries` | [../docs/import-performance.md](../docs/import-performance.md) | 导出条目总数，导入进度才有真实百分比（不全量解压） |
+| 19 | `src/services/chat/history/zipReader.ts` | `cached zip directory` | 同上 | 中央目录解析结果按 `File` 缓存，一次导入只解析一遍 |
+| 20 | `src/services/chat/history/zipReader.ts` | `cached directory in count` | 同上 | `countZipEntries` 复用缓存 |
+| 21 | `src/services/chat/history/zipReader.ts` | `cached directory in readArchive` | 同上 | `readArchive` 复用缓存 |
 
-新增文件（不进上游，放在 `web/src/shell/`）见 `web-patches/`，共 10 个。
+### 移动端 UI 覆盖层
+
+移动端按官方 Android App 重做（见 [`../docs/mobile-ui-spec.md`](../docs/mobile-ui-spec.md)）。
+除整文件 fork 的组件外，还有 3 个 `mobile-ui:` 锚点补丁：
+
+| # | 上游文件 | 标记 | 说明 |
+| --- | --- | --- | --- |
+| 22 | `src/i18n/zh.ts` | `mobile strings zh` | 欢迎语、按住说话、拍照/相册/文件、搜索对话内容等文案 |
+| 23 | `src/i18n/en.ts` | `mobile strings en` | 英文对应文案 |
+| 24 | `src/main.tsx` | `mobile css` | 在 `global.css` 之后引入移动端 token / 样式 |
+
+新增文件（不进上游）见 `web-patches/`：壳层 10 个注入到 `web/src/shell/`，移动端覆盖层
+注入到 `web/src/mobile/`。桌面端分支保持上游原样。
 
 ## 允许改什么、不许改什么
-
-规格明确要求界面与桌面浏览器一致，所以改动范围是封闭的：
 
 **允许**
 
 - 安全区 CSS（`safe-area.css`）与 viewport meta
 - API Key 的存储与注入
-- 历史 ZIP 导入 / 合并
+- 历史 ZIP 导入 / 合并 / 导入性能与内存
 - 首次启动引导
 - ES2023 方法替换（内核兼容）
 - 麦克风永久拒绝时的引导
+- 移动端 UI 覆盖层（按官方 App；只影响 `isMobile` 分支）
 
 **不允许**
 
-- 改任何布局、间距、字号、配色
-- 加底部导航、抽屉、手势之类「移动化」改造
+- 改桌面端布局、间距、字号、配色
 - 改上游的业务逻辑、请求协议
-- 往包里塞 Key、加代理服务器
+- 往包里塞 Key、加代理服务器、加遥测
+- 把个人数据（截图 / 会话 ZIP / APK / 日志）或私钥以外的敏感信息提交进仓库
 
 ## 上游升级时怎么重放
 
@@ -68,6 +88,6 @@
 
 > **锚点宁可失败也不要静默跳过**
 > 如果用了模糊匹配（例如只匹配 `const sorted =`），上游改了这行之后补丁会「成功」
-> 但补错位置，产出一个看似正常、实际有问题的包。所以 17 处全部是
-> `replaceOnce` / `insertOnce`：找不到、或找到多处，都立刻抛错。
+> 但补错位置，产出一个看似正常、实际有问题的包。所以所有补丁点都走
+> `replaceOnce` / `insertOnce` / `upsertBlock`：找不到、或找到多处，都立刻抛错。
 > 升级时花十分钟对齐锚点，比发布后排查一个静默的数据丢失便宜得多。

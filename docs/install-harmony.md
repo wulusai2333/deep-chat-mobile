@@ -133,7 +133,7 @@ $env:ANDROID_HOME = 'D:\soft\android-sdk'
 $adb = "$env:ANDROID_HOME\platform-tools\adb.exe"
 
 & $adb devices          # 手机上会弹「允许 USB 调试吗」，勾选「始终允许」
-& $adb install -r "dist-apk\deep-chat-0.1.2-x64-release.apk"
+& $adb install -r "dist-apk\deep-chat-0.2.1-x64-release.apk"
 ```
 
 装完可以直接看日志，排查问题非常有用：
@@ -225,7 +225,7 @@ $adb = "$env:ANDROID_HOME\platform-tools\adb.exe"
 ### 7.5 备份文件在哪
 
 ```
-文件管理 → 文档 → DeepChat → deep-chat-backup-20261118-193000.zip
+文件管理 → 文档 → DeepChat → deep-chat-backup-<日期>-<时间>.zip
 ```
 
 - **Android 10（API 29）及以上**：通过 MediaStore 写入，路径显示为 `Documents/DeepChat/`
@@ -279,7 +279,7 @@ $adb = "$env:ANDROID_HOME\platform-tools\adb.exe"
 收集这三样：
 
 1. **系统版本**：设置 → 关于手机 → HarmonyOS 版本
-2. **应用版本**：应用内 设置 → 关于（或看 APK 文件名 `deep-chat-0.1.2-...`）
+2. **应用版本**：应用内 设置 → 关于（或看 APK 文件名 `deep-chat-0.2.1-...`）
 3. **日志**（如果能连电脑）：
 
    ```powershell

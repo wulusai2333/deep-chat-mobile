@@ -64,7 +64,7 @@ const pollJson = async (url, timeoutMs) => {
  * @param {string} options.workDir  临时目录（放 profile，必须每轮唯一，否则 Chrome 抢锁）
  * @param {string} [options.initScript] 在每个新文档的脚本执行前注入
  */
-export const openBrowser = async ({ workDir, initScript }) => {
+export const openBrowser = async ({ workDir, initScript, windowSize }) => {
   const browser = findBrowser()
   if (!browser) {
     throw Object.assign(new Error('没找到 Chrome / Edge'), { code: 'NO_BROWSER' })
@@ -90,6 +90,9 @@ export const openBrowser = async ({ workDir, initScript }) => {
       '--disable-extensions',
       '--disable-background-networking',
       '--mute-audio',
+      // 指定视口尺寸（如 '390,844'）。移动端布局走的是完全不同的分支
+      // （底部弹层、横排 tab），桌面视口下测不到移动端的问题。
+      ...(windowSize ? [`--window-size=${windowSize}`] : []),
       `--remote-debugging-port=${cdpPort}`,
       `--user-data-dir=${join(workDir, 'profile')}`,
       'about:blank',
@@ -183,12 +186,107 @@ export const openBrowser = async ({ workDir, initScript }) => {
     const send = (method, params) =>
       new Promise((resolve, reject) => {
         const id = nextId++
-        pending.set(id, { resolve, reject })
+        // 【为什么要超时】CDP 没有请求超时：如果页面 renderer 卡死（例如死循环、
+        // 或截图时合成器不响应），这个 Promise 永远不会 settle，整个 ui-preview
+        // 就一直挂着并占着构建锁（实测卡过 6 分钟以上）。超时后抛错，由调用方清理。
+        const timer = setTimeout(() => {
+          pending.delete(id)
+          reject(new Error(`CDP ${method} 超时（30s）——页面可能卡死或正在弹原生对话框`))
+        }, 30000)
+        pending.set(id, {
+          resolve: (value) => {
+            clearTimeout(timer)
+            resolve(value)
+          },
+          reject: (error) => {
+            clearTimeout(timer)
+            reject(error)
+          },
+        })
         socket.send(JSON.stringify({ id, method, params }))
       })
 
     await send('Page.enable')
     await send('Runtime.enable')
+
+    /**
+     * 截图存盘。
+     *
+     * 加它是因为「高亮反了」「UI 和官方不一致」这类问题**看 DOM 看不出来**：
+     * aria-selected 和背景色都是对的，但用户看到的就是不对。
+     * 只有把两个状态各截一张图放在一起比，才能判断到底是哪一层出的问题。
+     */
+    const screenshot = async (filePath, { fullPage = false, clip } = {}) => {
+      let params = { format: 'png' }
+      if (fullPage) {
+        const metrics = await send('Page.getLayoutMetrics')
+        const size = metrics.cssContentSize ?? metrics.contentSize
+        params = {
+          ...params,
+          captureBeyondViewport: true,
+          clip: { x: 0, y: 0, width: size.width, height: size.height, scale: 1 },
+        }
+      } else if (clip) {
+        params = { ...params, clip: { ...clip, scale: 1 } }
+      }
+      const { data } = await send('Page.captureScreenshot', params)
+      const { writeFileSync, mkdirSync } = await import('node:fs')
+      const { dirname } = await import('node:path')
+      mkdirSync(dirname(filePath), { recursive: true })
+      writeFileSync(filePath, Buffer.from(data, 'base64'))
+      return filePath
+    }
+
+    /**
+     * 设定视口尺寸（含触摸模拟）。
+     *
+     * --window-size 只能改窗口，最小宽度受系统限制（实测 390 变成 512），
+     * 真机是 393 CSS px 左右，差别足以让布局走不同分支。
+     * Emulation.setDeviceMetricsOverride 才能精确复现。
+     */
+    const setViewport = async ({ width, height, mobile = true, scale = 1 }) => {
+      await send('Emulation.setDeviceMetricsOverride', {
+        width,
+        height,
+        deviceScaleFactor: scale,
+        mobile,
+      })
+      if (mobile) {
+        await send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 })
+      }
+      return { width, height, mobile }
+    }
+
+    /**
+     * 在坐标处发一次真实点击（Input 域）。
+     *
+     * 【为什么必须有它】
+     * JS 的 element.click() 只派发 click 事件，**不会**触发 :hover / :active。
+     * 而「点 A 却像 B 高亮了」这类问题恰恰只在带 hover 的真实交互里出现，
+     * 用 .click() 去测永远是绿的 —— 这正是前面几轮验证没抓到它的原因。
+     */
+    const inputClick = async (x, y) => {
+      const base = { x, y, button: 'left', clickCount: 1, buttons: 1 }
+      await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y, buttons: 0 })
+      await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...base })
+      await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...base, buttons: 0 })
+      return { x, y }
+    }
+
+    /**
+     * 真实触摸点击。
+     *
+     * 与 inputClick 的区别：触摸事件走的是移动端的命中/悬停模型。
+     * WebView 里点过的元素会**残留 :hover 状态**，这正是
+     * 「点 A 却像 B 高亮了」这类问题的来源，鼠标事件复现不出来。
+     */
+    const tap = async (x, y) => {
+      const point = [{ x, y, radiusX: 8, radiusY: 8, force: 1, id: 1 }]
+      await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: point })
+      await new Promise((resolve) => setTimeout(resolve, 40))
+      await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+      return { x, y }
+    }
 
     // 必须在导航之前注入，否则页面自己的脚本已经跑完了
     if (initScript) {
@@ -226,7 +324,7 @@ export const openBrowser = async ({ workDir, initScript }) => {
       throw new Error(`等待条件超时${label ? `（${label}）` : ''}: ${expression}`)
     }
 
-    return { evaluate, navigate, waitFor, close: async () => {
+    return { evaluate, navigate, waitFor, screenshot, setViewport, tap, inputClick, close: async () => {
       // 先请求浏览器自己优雅退出：这条命令精确对应「我们启动的那一个实例」，
       // 不会误伤用户自己开的 Chrome，也不依赖 WMI。
       // 必须在 close()socket 之前发，否则这条消息发不出去。

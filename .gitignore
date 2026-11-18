@@ -28,6 +28,11 @@ android/app/debug/
 native/*/build/
 
 # 签名与密钥：绝不入库
+#
+# release 私钥只存在本机 + 你的离线备份；仓库只保存**证书指纹**
+# (android/release-cert.sha256，公开信息)，用来校验「签名没被换掉」。
+# 私钥一旦进了版本库，任何拿到仓库的人都能签出能覆盖安装的假更新 ——
+# 公开仓库尤其不能放。私钥丢失后如何恢复见 docs/build.md §4。
 *.keystore
 *.jks
 keystore.properties
@@ -38,8 +43,33 @@ keystore.properties
 Thumbs.db
 *.log
 
+# 本地环境与编辑器
+.env
+.env.*
+!.env.example
+.vscode/
+.idea/
+
+# 根目录随手放的截图/图片（需要入库的配图请放 docs/assets/，并先确认不含个人数据）
+/*.png
+/*.jpg
+/*.jpeg
+/*.webp
+/*.bmp
+
 # 交付用 APK 副本（二进制，由 pnpm android:release 生成，不进版本库）
 deliver/
 
 # 用户自己放的 UI 参考截图，按目录名要求不进版本库
 UI参考图 不允许添加到git/
+
+# ── 个人数据：任何情况下都不进版本库 ──────────────────────────────────────
+# 会话导出 ZIP（DeepSeek 官方 App 的备份）、截图、录屏、日志、抓包
+deepseek_data*.zip
+deepseek_data*.json
+*.apk
+*.aab
+*.zip
+screenshots/
+captures/
+recordings/

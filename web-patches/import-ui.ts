@@ -88,3 +88,111 @@ export const showImportResult = async (result: MergeResult): Promise<void> => {
   card.append(actions)
   document.body.append(host)
 }
+
+/** 导入进度：调用方每次推进时更新这组数值 */
+export type ImportProgress = {
+  /** 当前阶段的人话描述，如「正在解析会话」「正在写入本机」 */
+  phase: string
+  /** 已完成数量；未知时为 null */
+  done: number | null
+  /** 总量；未知时为 null */
+  total: number | null
+}
+
+/**
+ * 导入进度浮层 —— 解决「导入要几分钟，中间完全不知道在干什么」。
+ *
+ * 【为什么必须做】
+ * 用户实测：导入后列表没出现会话，过了好几分钟才静默成功，
+ * 期间一直以为失败了。合并导入要解压、逐条解析、逐条写 IndexedDB，
+ * 大归档在手机上就是分钟级操作 —— 没有反馈，用户只会当成卡死然后杀掉应用。
+ *
+ * 【为什么返回 {update, close} 而不是自己管生命周期】
+ * 进度浮层必须由调用的那一侧在 try/finally 里关掉，
+ * 否则导入抛错时会留一个永远停在 99% 的遮罩，比没有更糟。
+ */
+export const showImportProgress = (initial: ImportProgress): {
+  update: (next: ImportProgress) => void
+  close: () => void
+} => {
+  const c = palette()
+  const { host, card } = createDialog('shell-import-progress')
+
+  card.append(title('正在导入历史会话'))
+  const phaseLine = paragraph(initial.phase, c.text)
+  phaseLine.style.marginTop = '4px'
+  card.append(phaseLine)
+
+  // 进度条：外层轨道 + 内层填充
+  const track = document.createElement('div')
+  track.style.cssText = [
+    'margin-top:16px',
+    'height:6px',
+    'border-radius:3px',
+    `background:${c.field}`,
+    'overflow:hidden',
+  ].join(';')
+  const fill = document.createElement('div')
+  fill.style.cssText = [
+    'height:100%',
+    'width:0%',
+    'border-radius:3px',
+    `background:${c.primary}`,
+    'transition:width 120ms linear',
+  ].join(';')
+  track.append(fill)
+  card.append(track)
+
+  const counter = paragraph('', c.muted)
+  counter.style.marginTop = '8px'
+  card.append(counter)
+
+  const hint = paragraph('导入期间请保持应用在前台，不要关闭本应用。', c.muted)
+  hint.style.marginTop = '12px'
+  card.append(hint)
+
+  document.body.append(host)
+
+  /**
+   * 更新进度。
+   *
+   * 每次推进都写 DOM 会拖慢本来就不快的导入（尤其逐条写库时），
+   * 因此合并到下一帧再落地：同一帧内多次 update 只渲染最后一次。
+   */
+  let pending: ImportProgress | null = null
+  let scheduled = false
+  const flush = () => {
+    scheduled = false
+    const next = pending
+    pending = null
+    if (!next) {
+      return
+    }
+    phaseLine.textContent = next.phase
+    if (next.done !== null && next.total !== null && next.total > 0) {
+      const percent = Math.min(100, Math.round((next.done / next.total) * 100))
+      fill.style.width = `${percent}%`
+      counter.textContent = `${next.done} / ${next.total}（${percent}%）`
+    } else if (next.done !== null) {
+      fill.style.width = '100%'
+      counter.textContent = `${next.done} 项`
+    } else {
+      // 总量未知：给一段固定填充，配合文案表明仍在进行
+      fill.style.width = '35%'
+      counter.textContent = ''
+    }
+  }
+
+  return {
+    update: (next) => {
+      pending = next
+      if (!scheduled) {
+        scheduled = true
+        requestAnimationFrame(flush)
+      }
+    },
+    close: () => {
+      host.remove()
+    },
+  }
+}

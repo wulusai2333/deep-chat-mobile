@@ -9,7 +9,9 @@
 `chat-demo` 是纯静态前端（React + rspack），所有数据存本地 IndexedDB，直接调 `https://api.deepseek.com`。
 本项目用 Capacitor 把它套进一个 Android WebView，产出可侧载的 APK。
 
-**没有改上游界面**。所有改动都在 `web-patches/`，由脚本以上游原文件为基准重放补丁，见 [§5](#5-哪些地方动了上游代码)。
+**桌面端界面不改；移动端界面按官方 App 重做**，两者都通过 `web-patches/` 里的补丁实现，
+由脚本以上游原文件为基准重放，见 [§5](#5-哪些地方动了上游代码) 与
+[`mobile-ui-spec.md`](./mobile-ui-spec.md)。
 
 ```
 deep-chat-mobile/
@@ -17,10 +19,18 @@ deep-chat-mobile/
 ├── package.json               脚本入口
 ├── web/                       上游仓库的只读克隆（不要手改，会被 prepare 覆盖）
 ├── web-patches/               本项目对上游的补丁源 + 壳层代码
+│   ├── *.ts / safe-area.css   壳层代码（注入 web/src/shell/）
+│   └── mobile/                移动端覆盖层（见 docs/mobile-ui-spec.md §1）
+│       ├── common/            设计 tokens、图标、logo
+│       ├── chatinput/         移动端输入框 / 附件面板 / 按住说话
+│       ├── topbar/            移动端顶栏
+│       ├── drawer/            移动端抽屉（搜索 + 列表 + 账户行）
+│       ├── overrides/         整文件 fork 的上游组件
+│       └── manifests/         每个 area 的 fork 清单
 ├── native/                    原生插件源码（Java）—— Java 的唯一真源
 ├── android/                   Capacitor 生成的 Android 工程
 ├── scripts/                   构建流水线
-├── docs/                      本文档
+├── docs/                      本文档 + mobile-ui-spec.md
 ├── dist/                      build:web 的产物（进 APK 的网页）
 ├── pwa-dist/                  build:pwa 的产物（可直接部署的 PWA）
 └── pwa-icons/                 图标源（由 make-icons 生成）
@@ -106,38 +116,44 @@ pnpm web:install
 ## 2. 一键构建
 
 ```powershell
-pnpm web:prepare      # 1. 校验上游 commit + 注入壳层 + 重放补丁
+pnpm web:prepare      # 1. 校验上游 commit + 注入壳层/移动端覆盖层 + 重放补丁
 pnpm build:web        # 2. 上游 rspack 构建 → dist/
-pnpm icons            # 3. 生成图标（首次或换图标时跑一次）
-pnpm cap:sync         # 4. 把 dist/ 灌进 android/app/src/main/assets/public/
-pnpm keystore         # 5. 生成签名 keystore（只跑一次，见 §4）
-pnpm android:release  # 6. 编译签名的 release APK
-pnpm verify           # 7. 自检 55 项硬指标
-pnpm accept           # 8. 用无头浏览器验收打包进 APK 的那份产物
-pnpm test:import      # 9. 合并导入的端到端测试（真实 IndexedDB）
+pnpm ui:preview       # 3. 构建 + 无头截图（移动 5 屏 + 桌面回归图，开发时常用）
+pnpm icons            # 4. 生成图标（首次或换图标时跑一次）
+pnpm cap:sync         # 5. 把 dist/ 灌进 android/app/src/main/assets/public/
+pnpm keystore         # 6. 发布签名自检（私钥只在本机，见 §4）
+pnpm android:release  # 7. 编译签名的 release APK（自动校验证书指纹）
+pnpm verify           # 8. 自检 APK / 安全 / 补丁硬指标
+pnpm accept           # 9. 用无头浏览器验收打包进 APK 的那份产物
+pnpm test:import      # 10. 合并导入的端到端测试（真实 IndexedDB）
 ```
 
-产物：`dist-apk/deep-chat-0.1.2-x64-release.apk`（约 5.4 MB）
+产物：`dist-apk/deep-chat-0.2.1-x64-release.apk`（约 5.8 MB）
 
-调试包把第 6 步换成 `pnpm android:debug`，产物名带 `-debug`，用 debug 签名。
+调试包把第 7 步换成 `pnpm android:debug`，产物名带 `-debug`。**debug 与 release 使用同一把
+发布密钥**（见 `android/app/build.gradle`），所以两者可以互相覆盖安装，不会出现
+「先装过 debug 包，正式包盖不上」的问题。
 
-**顺序不能乱**。`cap:sync` 之前必须有 `dist/`；`build-apk` 内部也会重跑 `cap:sync`，
-所以 5→6 之间手工改了网页需要重新走一遍 2→4。
+**顺序不能乱**。`cap:sync` 之前必须有 `dist/`；`build-apk` **只负责同步原生 Java 并调 Gradle**，
+不会再重跑 `cap:sync` —— 手工改了网页必须重新走一遍 2→5→6，否则打进 APK 的还是旧 assets。
+（`pnpm verify` 的 A 组会用「assets 与 dist 逐字节一致」抓这种漏跑。）
 
 ### 2.1 各脚本做什么
 
 | 脚本 | 作用 | 幂等 |
 | --- | --- | --- |
-| `prepare-web.mjs` | 校验 `web/` 在上游 pin 的 commit 上；把 `web-patches/*` 复制到 `web/src/shell/`；对上游 9 个文件重放补丁 | ✅ 重复跑安全 |
+| `prepare-web.mjs` | 校验 `web/` 在上游 pin 的 commit 上；把 `web-patches/*` 注入 `web/src/shell/`、`web-patches/mobile/` 注入 `web/src/mobile/`；按 manifest 应用整文件 fork；对上游文件重放锚点补丁 | ✅ 重复跑安全 |
 | `build-web.mjs` | 直接调 `web/node_modules/@rspack/cli/bin/rspack.js`，设 `NODE_ENV=production`，再把 `web/dist/` 复制到 `dist/` | ✅ |
+| `ui-preview.mjs` | 串行化构建（文件锁）+ 无头截图：移动端欢迎页/抽屉/附件面板/按住说话/发送态 + 桌面回归图 | ✅ |
+| `mobile-forks.mjs` | 移动端 fork 辅助：`hash` / `new` / `check`（见 `mobile-ui-spec.md` §1.2） | 只读 / 防护式 |
 | `cap-sync.mjs` | 先 `sync-native.mjs` 同步 Java，再跑 `capacitor sync android`，最后校验 assets 真的非空 | ✅ |
-| `build-apk.mjs` | 检查环境变量 → 同步 Java → `gradlew assembleRelease` → 归档改名 → `apksigner verify` | ✅ |
-| `make-keystore.mjs` | 生成 keystore + `keystore.properties`。**文件已存在时拒绝执行** | 防护式 |
+| `build-apk.mjs` | 检查环境变量（release 还要求发布签名齐全）→ 同步 Java → `gradlew assembleRelease` → 归档改名 → `apksigner verify` → **证书指纹与 `release-cert.sha256` 比对** | ✅ |
+| `make-keystore.mjs` | 生成 keystore + `keystore.properties`（**只在本机，绝不入库**）。**已存在时拒绝覆盖**，且存在指纹基线时拒绝重新生成（防签名丢失后误换） | 防护式 |
 | `make-icons.mjs` | 按像素画图标，写 `android/.../mipmap-*` 与 `pwa-icons/` | ✅ 覆盖写 |
 | `build-pwa.mjs` | 组装 `pwa-dist/`（manifest + service worker + 图标） | ✅ |
-| `verify.mjs` | 55 项硬指标自检，失败退出码 1 | 只读 |
-| `accept.mjs` | 无头 Chromium 打开 **APK 里那份** assets，注入假原生桥，验证渲染 / 引导层 / Key 注入时序 / PWA 兜底 / 安全区变量 | 只读 |
-| `test-import.mjs` | 用真实 IndexedDB 跑合并导入的 10 个场景 31 条断言 | 只读 |
+| `verify.mjs` | 硬指标自检（构建/APK/安全/补丁完整性），失败退出码 1 | 只读 |
+| `accept.mjs` | 无头 Chromium 打开 **APK 里那份** assets，注入假原生桥，验证渲染 / 引导层 / Key 注入时序 / PWA 兜底 / 安全区 / 移动端 UI 结构 | 只读 |
+| `test-import.mjs` | 用真实 IndexedDB 跑合并导入的 10 个场景 43 条断言 | 只读 |
 
 > **为什么 `build:web` 不直接跑 `pnpm build`**
 > 上游的构建脚本是 `NODE_ENV=production rspack build`，这种写法在 Windows 的 `cmd` 下不成立
@@ -173,79 +189,136 @@ APK 走 Android 兼容层。详细步骤见 [install-harmony.md](./install-harmo
 
 ```powershell
 & "$env:ANDROID_HOME\platform-tools\adb.exe" devices
-& "$env:ANDROID_HOME\platform-tools\adb.exe" install -r dist-apk\deep-chat-0.1.2-x64-release.apk
+& "$env:ANDROID_HOME\platform-tools\adb.exe" install -r dist-apk\deep-chat-0.2.1-x64-release.apk
 ```
 
 `-r` 是覆盖安装、保留数据。**签名必须一致** —— 换签名只能先卸载，本地数据会全丢。
 
 ---
 
-## 4. 签名
+## 4. 发布签名：私钥只在本机，仓库只存证书指纹
 
-Android 用「包名 + 签名」识别是不是同一个应用。**keystore 丢了就再也发不出能覆盖安装的更新**，
-用户只能卸载重装（本地会话全没）。所以：
+Android 用「包名 + 签名」判定是不是同一个应用。签名一变：
 
-```powershell
-pnpm keystore
+- 已安装的老版本无法覆盖升级（`INSTALL_FAILED_UPDATE_INCOMPATIBLE`）；
+- 唯一出路是卸载重装，而卸载会清掉本机会话。
+
+所以从 0.2.x 起，**签名永久固定**，但**私钥绝不进仓库**：
+
+| 文件 | 作用 | 是否入库 |
+| --- | --- | --- |
+| `android/deep-chat.keystore` | 发布私钥（PKCS12，alias `deepchat`，口令 `deepchat-dev`） | ❌ **绝不入库**（`.gitignore`）；只在本机 + 离线备份 |
+| `android/keystore.properties` | 签名口令与别名，`build.gradle` 从这里读 | ❌ **绝不入库** |
+| `android/release-cert.sha256` | 发布证书 SHA-256 指纹（公开信息），构建与 `verify` 的硬基线 | ✅ 入库 |
+
+证书指纹（`apksigner verify --print-certs`）：
+
+```text
+SHA-256: 594829f66ba88b67f8c5b025c45aaa418b58ec31692cf35142c56071088d9401
+DN:      CN=Deep Chat, OU=Mobile, O=DeepChat, C=CN
+有效期:  10000 天（约 27 年）
 ```
 
-产出：
+> **为什么只入库指纹、不入库私钥？**
+> 指纹是公开信息，能让构建和自检发现「签名被换掉了」；而私钥一旦入库，
+> 任何拿到仓库的人都能签出**能覆盖安装的假更新**。本项目准备公开仓库 / 公开发布
+> Release APK，所以私钥必须只留在本机。`pnpm verify` 会检查私钥没有被 git 跟踪、
+> 历史里也没有（命中就失败）。
 
-- `android/deep-chat.keystore` —— 私钥。**离线备份，别进 git**
-- `android/keystore.properties` —— 口令与别名。同样别进 git
+> **最重要的一条：私钥必须有离线备份。**
+> 私钥丢失 = 再也发不出能覆盖安装的更新（只能换签名、让所有用户卸载重装）。
+> 至少备份两份：密码管理器附件 / 加密 U 盘，并记下 alias `deepchat` 与口令。
+> 仓库里的指纹文件只能证明「该用哪把钥匙」，本身救不回签名。
 
-两个文件都已在 `.gitignore` 里。`build.gradle` 从 `keystore.properties` 读签名配置；
-文件不存在时 release 构建不带签名（能编译，但装不上真机）。
+### 4.1 构建时如何防止签名被换
 
-### 4.1 对外分发前必须做的
+`scripts/build-apk.mjs` 在 release 路径上做三道闸：
 
-脚本生成的是**开发默认口令** `deepchat-dev`，并在输出里明确警告。要让别人装，改成自己的：
+1. `keystore.properties` / keystore 缺失 → **直接失败**，不再产出「能编译但装不上」的未签名包；
+2. 构建完跑 `apksigner verify --print-certs`；
+3. 把实际证书 SHA-256 与 `android/release-cert.sha256` 比对，不一致 → **失败**并提示恢复密钥。
 
-```powershell
-& "$env:JAVA_HOME\bin\keytool.exe" -genkeypair -v `
-  -keystore android\deep-chat.keystore -alias deepchat `
-  -keyalg RSA -keysize 2048 -validity 10000 `
-  -storepass '<强口令>' -keypass '<强口令>' `
-  -dname "CN=你的名字, OU=Mobile, O=你的组织, C=CN"
-```
+`pnpm verify` 的 B 组同样会比对指纹，并检查私钥未被 git 跟踪，所以「签名被悄悄换掉」
+或「私钥误提交」都不可能一路绿灯。
 
-然后同步改 `android/keystore.properties`。`validity 10000`（约 27 年）是为了避免证书过期后无法更新。
+### 4.2 指纹固定之后，升级规则
 
-### 4.2 校验签名
+- **0.2.x → 0.2.y / 0.3.0**：`adb install -r` 或直接点 APK 覆盖安装即可，数据保留。
+- **0.1.x → 0.2.x**：早期发布的包用的是另一把密钥（已丢失，无法恢复），这是唯一一次
+  需要卸载重装的跨越；从 0.2.0 起签名固定，以后不会再发生。
+- 需要保留 0.1.x 的会话时：先在旧版里「设置 → 数据 → 导出」，卸载重装后导入。
+
+### 4.3 公开发布 Release 时的做法
+
+- **仓库不提交 APK**（`.gitignore` 排除 `*.apk` / `dist-apk/` / `deliver/`）；
+  本机构建出签名 APK 后，作为 **GitHub Release 的附件**上传（Release 附件不进入 git 历史）。
+- 发布前跑一遍 `pnpm verify`（含私钥未入库检查）与 `pnpm accept`；公开仓库前再确认
+  `git log --all --name-only | findstr keystore` 为空。
+- **轮换（极不推荐，只在私钥泄漏/丢失时做）**：
+  1. 生成新 keystore，更新 `keystore.properties`；
+  2. 从新 APK 用 `apksigner verify --print-certs` 取新指纹，写入 `android/release-cert.sha256`；
+  3. 版本号升一个 minor，并在发布说明里明确「本次必须卸载重装」；
+  4. 老用户导出/导入数据。
+- **禁止**通过改 `release-cert.sha256` 去迁就一个错误的 keystore —— 那只是把不一致藏起来。
+
+### 4.4 手工校验签名
 
 ```powershell
 & "$env:ANDROID_HOME\build-tools\36.0.0\apksigner.bat" verify --print-certs `
-  dist-apk\deep-chat-0.1.2-x64-release.apk
+  dist-apk\deep-chat-0.2.1-x64-release.apk
 ```
 
-`build-apk.mjs` 在 release 结束时自动跑这一步。
+`build-apk.mjs` 在 release 结束时自动跑这一步，并打印指纹。
 
 ---
 
 ## 5. 哪些地方动了上游代码
 
-**原则：能不改就不改。** 需要改的一律在 `web-patches/` 里，由 `prepare-web.mjs` 用
-「锚点 + `mobile-shell:` 标记」的方式重放，每个替换点都带注释说明为什么。
+**原则：能不改就不改。** 需要改的一律在 `web-patches/` 里，由 `prepare-web.mjs`
+以上游原文件为基准重放。三种补丁形态：
 
-改动清单（共 9 个上游文件、14 处替换）：
+1. **注入**：我们的新文件（`web-patches/*.ts` → `web/src/shell/`，`web-patches/mobile/` → `web/src/mobile/`）
+2. **锚点插入 / 精确替换**：上游文件里插入带 `mobile-shell:` / `mobile-ui:` 标记的代码段，找不到锚点就报错
+3. **整文件 fork**：上游组件需要整文件改写时，fork 放 `web-patches/mobile/overrides/`，
+   manifest 记录「基于上游哪个 sha256」；prepare 时三方比对（已是 fork / 仍是上游 / 都不是），
+   上游一变就明确失败。详见 [`mobile-ui-spec.md`](./mobile-ui-spec.md) §1。
+
+> 导入链路的性能与内存（真实 32 MB 归档、分块原生桥、根因数据）单独记在
+> [`import-performance.md`](./import-performance.md)。
+
+### 5.1 壳层 / 功能补丁（上游 11 个文件，25 处）
 
 | 文件 | 改了什么 | 为什么必须改 |
 | --- | --- | --- |
 | `src/index.html` | viewport 加 `viewport-fit=cover` | 不加则 `env(safe-area-inset-*)` 恒为 0，刘海会挡内容 |
-| `src/main.tsx` | render 前 `await shellReady` | 让加密存储里的 Key 在首屏挂载前就位，否则每次启动都弹设置窗 |
+| `src/main.tsx` | render 前 `await shellReady`；引入移动端样式 | 让加密存储里的 Key 在首屏挂载前就位；移动端 tokens 要在 global.css 之后生效 |
 | `src/components/settings/settingsDialogState.ts` | `ensureApiKey()` 增加首启引导判断 | 引导自己管 Key 输入，两套弹窗不能同时出现 |
 | `src/services/settings.ts` | Key 的读写走加密存储；内存变量兜底 | **核心安全需求**：Key 不许落 localStorage 明文 |
 | `src/services/chat/history/toLocal.ts` | `toSorted()` → `.slice().sort()` | `toSorted` 是 ES2023，鸿蒙 4.3 的 WebView 内核不支持，会直接崩 |
 | `src/services/chat/store.ts` | `toReversed()` → `.slice().reverse()` | 同上 |
-| `src/services/chat/db.ts` | **新增** 3 个暂存辅助函数 | 合并导入需要「复制现有数据进暂存」，上游只有覆盖导入 |
+| `src/services/chat/db.ts` | **新增** 暂存辅助函数（复制现有数据 / 批量写会话 / 定向回填附件 MIME） | 合并导入需要「复制现有数据进暂存」，且不能再用 `getAll` 制造百 MB 级堆峰值 |
 | `src/services/chat/backup.ts` | 拆出 `exportHistorySnapshot()`；导入改走合并桥 | 自动备份需要不经过队列的快照；导入要 merge 而非 replace |
+| `src/services/chat/history/zipReader.ts` | 中央目录解析结果按 `File` 缓存 | 一次导入原本解析 3 遍中央目录（677 条目 × 3），缓存后 1 遍 |
 | `src/components/chatInput/useVoiceInput.ts` | 录音失败时补一次原生引导 | 区分「永久拒绝」与普通失败，否则用户被卡在一条看不懂的 toast 上 |
+| `src/i18n/zh.ts` `en.ts` | 产品名 + 移动端文案 | 正式客户端不叫 demo；移动端官方文案见 spec §3 |
+
+### 5.2 移动端 UI 覆盖层
+
+移动端界面按官方 App 重做，涉及「整文件 fork 的组件 + 新组件」：
+
+| 归属 | 文件 | 说明 |
+| --- | --- | --- |
+| App | `src/app/App.tsx` `App.module.css` | 抽屉打开时主界面右移；点主界面关抽屉 |
+| 会话页 | `src/components/session/{MobileHeader,Welcome,SessionView}.tsx` + css | 移动端换成官方风格，桌面分支不动 |
+| 抽屉 | `src/components/sider/Sider.tsx` + `Sider.module.css` | 移动端抽屉换成搜索 + 分组列表 + 账户行 |
+| 新组件 | `web-patches/mobile/{common,chatinput,topbar,drawer}/` | 顶栏、输入框、附件面板、按住说话、搜索、图标、logo、tokens |
 
 **绝不能做的事**（做了就是返工）：
 
-- 改布局、字号、间距、配色 —— 手机端界面必须与桌面浏览器一致
-- 给上游加 npm 依赖 —— `web/pnpm-lock.yaml` 会被破，且增大回归面
 - 在 `web/src/` 里手工改代码 —— 下次 `prepare-web` 会覆盖，改动丢失
+- 给上游加 npm 依赖 —— `web/pnpm-lock.yaml` 会被破，且增大回归面
+- 改上游桌面端代码的既有行为 —— 移动端改动只允许出现在 `isMobile` 分支；桌面端必须与改版前一致
+- 往 `web-patches/mobile/manifests/` 里写别的 area 的 fork —— 每个 area 一个文件，并行开发靠它隔离
 
 ### 5.1 拿不到上游源码怎么办
 
@@ -395,24 +468,26 @@ SW 需要 **https 或 localhost**。直接双击 `index.html`（`file://`）不�
 
 ## 9. 自检清单
 
-发布前跑这三条：
+发布前跑这四条：
 
 ```powershell
+pnpm ui:preview    # 移动端 5 屏 + 桌面回归图（人眼对比 UI参考图）
 pnpm verify        # 静态硬指标（不需要浏览器）
 pnpm accept        # 无头浏览器验收 APK 里的那份产物
 pnpm test:import   # 合并导入端到端（真实 IndexedDB）
 ```
 
-### 9.1 `verify`：55 项静态硬指标
+### 9.1 `verify`：静态硬指标
 
 覆盖四组：
 
 - **A 构建产物**：viewport、6 个壳能力真的在 bundle 里、CSS 变量、`assets` 与 `dist` 逐字节一致（防「忘了 cap sync 就打包」）
 - **B APK 硬指标**：权限白名单、无存储/相机/位置权限、`allowBackup=false`、`usesCleartextTraffic=false`、release 已签名
 - **C 安全**：产物无 `sk-` 字面量、keystore 分支先 return（不会回写 localStorage）、原生真用 `EncryptedSharedPreferences`、网络配置不信任用户 CA
-- **D 补丁完整性**：14 个 `mobile-shell:` 标记都在位（有人手工改回去会立刻暴露）
+- **D 补丁完整性**：全部 `mobile-shell:` / `mobile-ui:` 标记都在位、移动端覆盖层文件已注入、
+  fork 与 `web-patches/mobile/overrides/` 逐字节一致（有人手工改回去或 fork 漂移会立刻暴露）
 
-### 9.2 `accept`：25 项运行时验收
+### 9.2 `accept`：运行时验收
 
 无头 Chromium 打开 `android/app/src/main/assets/public/`（**已打包进 APK 的那份**），
 注入一个模拟的 `window.Capacitor.nativePromise` 原生桥，验证：
@@ -424,8 +499,9 @@ pnpm test:import   # 合并导入端到端（真实 IndexedDB）
 | C 已引导过 | 即使没 Key 也不再弹 |
 | D 纯浏览器（无桥） | 正常渲染、零异常、不装壳层专属能力 —— PWA 兜底路径 |
 | E 安全区 | `.frame` 锚点仍在、`--shell-inset-*` 是具体 px 而非 `env()` 原文 |
+| F 移动端 UI | 鲸鱼 logo、汉堡/朗读/新建对话、官方占位符、深度思考/智能搜索药丸、无 caveat、+ 打开附件面板（拍照/相册/文件）、麦克风切「按住说话」、抽屉搜索框与账户行 |
 
-### 9.3 `test:import`：31 条断言 / 10 个场景
+### 9.3 `test:import`：43 条断言 / 10 个场景
 
 | 场景 | 验的东西 |
 | --- | --- |
@@ -451,6 +527,12 @@ pnpm test:import   # 合并导入端到端（真实 IndexedDB）
 装到真机后逐项过：
 
 - [ ] 首屏正常渲染，无白屏；Markdown / KaTeX 公式 / Mermaid 图正常
+- [ ] 移动端 UI 与官方 App 截图一致：欢迎页鲸鱼 logo + 问候语、顶栏（汉堡/朗读/⊕）、圆角输入框 + 药丸 + ⊕/麦克风
+- [ ] 输入框「+」打开附件面板：最近图片行、拍照（真机拉起相机）、相册、文件（系统选择器）
+- [ ] 麦克风进入「按住说话」：按住说一句、松手出文字；短按提示「说话时间太短」；键盘键切回文字
+- [ ] 顶栏喇叭朗读当前会话最后一条回答，再点停止
+- [ ] 抽屉：主界面右移露出汉堡；搜索标题与正文都能命中；长按会话行可重命名/删除；底部账户行可进设置/切主题
+- [ ] 移动端会话页：标题居中、消息列表与输入框吸底，键盘弹出不遮挡输入框
 - [ ] 深浅色跟随系统切换
 - [ ] 键盘弹出不遮挡输入框
 - [ ] 顶部内容不被刘海/状态栏遮挡（安全区生效）
@@ -535,6 +617,7 @@ Capacitor 8 的 `SystemBars` 有两档行为，`web-patches/safe-area.css` 的�
 
 ## 13. 相关文档
 
+- [mobile-ui-spec.md](./mobile-ui-spec.md) —— 移动端 UI 对齐官方 App 的规格与覆盖层架构
 - [install-harmony.md](./install-harmony.md) —— 鸿蒙侧载安装细节
 - [`../native/secure-storage/README.md`](../native/secure-storage/README.md) —— 加密存储的威胁模型与 API
 - [`../web/src/services/chat/history/README.md`](../web/src/services/chat/history/README.md) —— 上游的归档格式说明

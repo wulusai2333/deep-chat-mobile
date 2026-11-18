@@ -15,8 +15,10 @@
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import { capture, fail, info, paths, pkgVersion, step, warn } from './lib/env.mjs'
+import { MOBILE_PATCHES, loadManifests, sha256Text } from './lib/mobile-overrides.mjs'
 
 const results = []
 const record = (ok, label, detail) => {
@@ -100,7 +102,20 @@ const checkBuild = () => {
     const css = readFileSync(mainCss, 'utf8')
     record(css.includes('--safe-area-inset-top'), '安全区 CSS 已打包')
     record(css.includes('--shell-inset-top'), '安全区变量已注入')
+    // 移动端覆盖层的设计 token：丢了说明 main.tsx 的 mobile.css 引入补丁失效
+    record(css.includes('--m-brand'), '移动端设计 token 已打包（--m-brand）')
+    record(css.includes('--m-drawer-width'), '移动端抽屉宽度 token 已打包')
   }
+
+  // 移动端官方文案：证明 i18n 补丁与移动端欢迎页真的进了 bundle
+  record(
+    js.includes('欢迎回来，想从哪里开始？'),
+    '移动端欢迎语已打包（mobile strings 补丁生效）'
+  )
+  record(
+    /(拍照|相册)/.test(js),
+    '附件面板文案已打包（拍照 / 相册）'
+  )
 
   // assets 必须和 dist 一致，否则手机上跑的是旧代码（很容易发生：忘了 cap sync）
   const assetsJs = findMainJs(join(paths.android, 'app', 'src', 'main', 'assets', 'public'))
@@ -258,14 +273,31 @@ const checkApk = async () => {
     warn(`manifest 解析失败：${String(error).slice(0, 120)}`)
   }
 
-  // 签名：release 必须有
+  // 签名：release 必须有，而且证书必须与仓库里记录的发布指纹一致。
+  // 「已签名」不等于「能覆盖安装」：换了一把 keystore 照样是有效签名，
+  // 但老用户会 INSTALL_FAILED_UPDATE_INCOMPATIBLE —— 所以要比对指纹。
   if (apk.includes('release')) {
     const apksigner = join(buildTools, version, process.platform === 'win32' ? 'apksigner.bat' : 'apksigner')
+    const certFile = join(paths.android, 'release-cert.sha256')
+    const expected = existsSync(certFile)
+      ? readFileSync(certFile, 'utf8')
+          .split('\n')
+          .map((line) => line.trim())
+          .find((line) => /^[0-9a-f]{64}$/i.test(line))
+          ?.toLowerCase()
+      : undefined
+    record(Boolean(expected), '发布证书指纹基线存在（android/release-cert.sha256）')
     try {
-      await capture(apksigner, ['verify', apkPath])
+      const { stdout } = await capture(apksigner, ['verify', '--print-certs', apkPath])
       record(true, 'release APK 已签名')
+      const actual = (/SHA-256 digest:\s*([0-9a-f]{64})/i.exec(stdout)?.[1] ?? '').toLowerCase()
+      record(
+        expected !== undefined && actual === expected,
+        'release APK 证书与发布基线一致（可覆盖安装）',
+        { apk: actual, expected }
+      )
     } catch {
-      record(false, 'release APK 已签名', '未签名包无法安装到真机，先运行 pnpm keystore')
+      record(false, 'release APK 已签名', '未签名包无法安装到真机，见 docs/build.md §4')
     }
   }
 }
@@ -313,6 +345,48 @@ const checkSecurity = () => {
     record(!/getSharedPreferences\s*\(/.test(java), '原生没有用普通 SharedPreferences 存 Key')
   }
 
+  // 发布签名：私钥只在本机（构建需要），**绝不能进版本库**。
+  // 仓库只保存证书指纹（公开信息），用来证明「签名没被换掉」。
+  for (const file of ['deep-chat.keystore', 'keystore.properties', 'release-cert.sha256']) {
+    record(existsSync(join(paths.android, file)), `android/${file} 存在（本机构建签名可用）`)
+  }
+  let trackedSecrets = []
+  try {
+    trackedSecrets = execFileSync('git', ['ls-files', 'android/deep-chat.keystore', 'android/keystore.properties'], {
+      cwd: paths.root,
+      encoding: 'utf8',
+    })
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+  } catch {
+    // 不在 git 工作区时无法判断，交给人工；不因此让整轮自检失败
+  }
+  record(
+    trackedSecrets.length === 0,
+    '发布私钥没有被 git 跟踪（公开仓库的前提）',
+    trackedSecrets.join(', ') || undefined
+  )
+  // 兜底：历史里也不能有私钥。公开前若命中，用 git filter-repo 或重建仓库清理。
+  let historyHits = []
+  try {
+    historyHits = execFileSync(
+      'git',
+      ['log', '--all', '--name-only', '--pretty=format:', '--', 'android/deep-chat.keystore', 'android/keystore.properties'],
+      { cwd: paths.root, encoding: 'utf8' }
+    )
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+  } catch {
+    // 同上
+  }
+  record(
+    new Set(historyHits).size === 0,
+    'git 历史里没有发布私钥（可安全公开仓库）',
+    [...new Set(historyHits)].join(', ') || undefined
+  )
+
   // manifest 硬指标（源文件层面，早于构建发现）
   const manifest = join(paths.android, 'app', 'src', 'main', 'AndroidManifest.xml')
   if (existsSync(manifest)) {
@@ -356,6 +430,45 @@ const checkPatches = () => {
     record(false, 'web/src/shell 已注入', '先运行 pnpm web:prepare')
   }
 
+  // 移动端覆盖层：注入文件必须都在（prepare 会整体重建 web/src/mobile）
+  const mobileDir = join(paths.web, 'src', 'mobile')
+  const mobileFiles = [
+    'common/mobile.css',
+    'common/icons.tsx',
+    'common/logo.tsx',
+    'chatinput/MobileChatInput.tsx',
+    'topbar/MobileTopBar.tsx',
+    'drawer/MobileDrawer.tsx',
+  ]
+  if (existsSync(mobileDir)) {
+    for (const file of mobileFiles) {
+      record(existsSync(join(mobileDir, file)), `web/src/mobile/${file} 已注入`)
+    }
+  } else {
+    record(false, 'web/src/mobile 已注入', '先运行 pnpm web:prepare')
+  }
+
+  // fork 完整性：web/src 里的文件必须等于 web-patches/mobile/overrides 里的 fork。
+  // 有人手改了 web/、或 prepare 后又被覆盖，会在这里暴露。
+  const manifests = loadManifests()
+  if (manifests.length === 0) {
+    record(true, '没有移动端 fork manifest（跳过）')
+  }
+  for (const { name, overrides } of manifests) {
+    for (const entry of overrides) {
+      const fork = join(MOBILE_PATCHES, entry.from)
+      const target = join(paths.web, entry.to)
+      if (!existsSync(fork) || !existsSync(target)) {
+        record(false, `${name}: fork 与目标都存在`, `${entry.to}`)
+        continue
+      }
+      record(
+        sha256Text(readFileSync(target, 'utf8')) === sha256Text(readFileSync(fork, 'utf8')),
+        `${name}: ${entry.to} 与 fork 一致`
+      )
+    }
+  }
+
   // 每个补丁点的标记都还在 —— 有人手工改回去会立刻暴露
   const markers = [
     ['src/i18n/zh.ts', 'mobile-shell: product name zh'],
@@ -375,6 +488,13 @@ const checkPatches = () => {
     ['src/components/chatInput/useVoiceInput.ts', 'mobile-shell: mic guidance'],
     ['src/services/chat/history/toLocal.ts', 'mobile-shell: no toSorted'],
     ['src/services/chat/store.ts', 'mobile-shell: no toReversed'],
+    ['src/services/chat/history/zipReader.ts', 'mobile-shell: count zip entries'],
+    ['src/services/chat/history/zipReader.ts', 'mobile-shell: cached zip directory'],
+    ['src/services/chat/history/zipReader.ts', 'mobile-shell: cached directory in count'],
+    ['src/services/chat/history/zipReader.ts', 'mobile-shell: cached directory in readArchive'],
+    ['src/i18n/zh.ts', 'mobile-ui: mobile strings zh'],
+    ['src/i18n/en.ts', 'mobile-ui: mobile strings en'],
+    ['src/main.tsx', 'mobile-ui: mobile css'],
   ]
   for (const [file, marker] of markers) {
     const full = join(paths.web, file)

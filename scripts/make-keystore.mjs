@@ -5,9 +5,13 @@
  *   • alias 与口令一旦用于发布就不能改 —— Android 用「包名 + 签名」判定是不是同一个应用，
  *     换了签名就只能先卸载再装，用户数据全丢；
  *   • validity 给 10000 天（约 27 年），避免证书过期后无法更新；
- *   • keystore 文件与 keystore.properties 都在 .gitignore 里 —— 绝不能进版本库。
+ *   • 发布 keystore 与 keystore.properties **绝不进版本库**：私钥只存在本机 +
+ *     你的离线备份，仓库只保存证书指纹（android/release-cert.sha256，公开信息）。
+ *     私钥入库意味着任何拿到仓库的人都能签出「能覆盖安装」的假更新。
  *
  * 本脚本只在 keystore 不存在时生成，不会覆盖已有文件（覆盖 = 丢掉发布签名）。
+ * 如果 release-cert.sha256 已经存在但 keystore 不见了，说明发布签名丢失 ——
+ * 这时**绝不重新生成**，否则等于换签名，已安装用户全部无法升级。
  */
 
 import { existsSync, writeFileSync } from 'node:fs'
@@ -40,6 +44,25 @@ const main = async () => {
     return
   }
 
+  // 发布指纹已经记录在案、但私钥不见了：这是「发布签名丢失」事故。
+  // 重新生成 = 换签名 = 所有已安装用户无法覆盖升级，必须停下来让人恢复备份。
+  if (existsSync(join(paths.android, 'release-cert.sha256'))) {
+    fail(
+      '发布签名丢失，拒绝重新生成',
+      [
+        `期望的 keystore：${keystorePath}`,
+        'android/release-cert.sha256 已记录发布证书指纹，说明这个项目已经发过包。',
+        '',
+        '请先从离线备份恢复 android/deep-chat.keystore 与 android/keystore.properties。',
+        '（本仓库不保存私钥，git 历史里也没有；恢复来源是你的密码管理器/加密盘备份。）',
+        '丢失后，指纹文件只能证明「该用哪把钥匙」，本身救不回签名。',
+        '',
+        '确实无法恢复时才考虑轮换签名，但那意味着老用户必须卸载重装、本地会话清空；',
+        '流程见 docs/build.md §4。不要直接跑本脚本生成新密钥。',
+      ].join('\n')
+    )
+  }
+
   step('生成 keystore')
   await run(keytool, [
     '-genkeypair',
@@ -57,7 +80,8 @@ const main = async () => {
 
   step('写入 android/keystore.properties')
   const properties = [
-    '# 由 scripts/make-keystore.mjs 生成 —— 不要提交到版本库（已在 .gitignore 中）',
+    '# 由 scripts/make-keystore.mjs 生成 —— 本机文件，绝不入库；请离线备份',
+    '# 换签名会导致老版本无法覆盖安装，动手前先读 docs/build.md §4',
     `storeFile=${KEYSTORE_FILE}`,
     `storePassword=${DEFAULT_STORE_PASSWORD}`,
     `keyAlias=${KEY_ALIAS}`,

@@ -42,47 +42,72 @@ WebView 的 JS 层没有 API 能把它变成 `File`/`Blob`。
 
 ## API
 
-插件名：`DeepChatFiles`
+插件名：`DeepChatFiles`。读写两个方向都走**分块协议**（单块 ≤ 256 KB），
+不再有「整包 base64 一次过桥」的方法 —— 32 MB 归档整包 base64 是 44 MB 字符串，
+WebView 桥与 Java 堆都要再复制一遍，低端机会直接 OOM 闪退，即使不崩也要好几秒。
 
-### `saveBackup({ fileName, data })`
-
-把 base64 编码的 ZIP 写到系统文档目录。
+### 读入：`hasPendingFile` / `openPendingFile` / `readPendingFileChunk` / `closePendingFile`
 
 ```ts
-// 请求
-{ fileName: 'deep-chat-backup-20261118-193000.zip', data: '<base64>' }
-// 响应
-{ path: 'Documents/DeepChat/deep-chat-backup-20261118-193000.zip' }  // 或 API 24-28 的绝对路径
+// 1) 有没有「外部打开」传进来、还没被取走的文件。只读，不清除。
+hasPendingFile() → { pending: boolean }
+
+// 2) 取走并建立读句柄。取走后 clear pendingUri，但句柄里的 content URI 仍可多次打开。
+openPendingFile() → { handle: string, name: string, size: number } | { name: null }
+//   size 未知时为 -1；> 48 MB 直接 reject
+
+// 3) 逐块读。length ≤ 262144（256 KB），offset 从 0 开始按返回的 size 前进。
+readPendingFileChunk({ handle, offset, length }) → {
+  data: '<base64>',   // 本块原始字节，NO_WRAP
+  size: number,       // 本块字节数；0 表示已到结尾
+  offset: number,
+  eof: boolean,
+}
+
+// 4) 释放句柄。幂等：句柄不存在也 resolve。
+closePendingFile({ handle }) → { closed: boolean }
+```
+
+错误语义：句柄不存在、offset 越界、length 非法（0 或 > 256 KB）、文件被截断、
+实际大小超过 48 MB 都会 reject；读失败时原生自行丢弃句柄，JS 侧在 `finally`
+里再 close 一次（幂等，不会二次抛错）。
+
+### 写出：`beginBackup` / `appendBackupChunk` / `finishBackup` / `abortBackup`
+
+```ts
+beginBackup({ fileName }) → { uploadId }
+//   在 getCacheDir()/deepchat-backup/ 建临时文件；fileName 的 / \ 会换成 _，含 .. 拒绝
+
+appendBackupChunk({ uploadId, data: '<base64>' }) → { written: 累计字节数 }
+//   单块 ≤ 256 KB；累计 > 256 MB 会被拒绝并自动清理
+
+finishBackup({ uploadId }) → { path }
+//   flush + close 临时文件，再流式落到 Documents（API 29+ MediaStore，API 24–28
+//   应用专属目录）；成功或失败都会删除临时文件；MediaStore 插入失败会删掉 pending 项，
+//   Documents 里不会出现半截备份
+
+abortBackup({ uploadId }) → { aborted: boolean }
+//   关闭并删除临时文件；幂等（未知 uploadId 也 resolve），供 JS 的 catch 清理路径调用
 ```
 
 - `fileName` 里的 `/` `\` 会被替换成 `_`，含 `..` 直接拒绝（防路径穿越）
-- 上限 **48 MB**，超了抛错
 - API 29+ 走 `MediaStore`：`RELATIVE_PATH = Documents/DeepChat`，
   用 `IS_PENDING` 1→0 保证别的应用不会读到写了一半的文件
 - API 24–28 走 `getExternalFilesDir(DIRECTORY_DOCUMENTS)/DeepChat`，
   返回绝对路径（那个目录在文件管理器里通常看不见，需要 adb 访问）
+- 原读取路径的 **48 MB 上限**保留；备份上传另设 **256 MB** 上限，防止异常调用写满缓存
 
-### `hasPendingFile()`
-
-```ts
-{ pending: boolean }
-```
-
-有没有「外部打开」传进来、还没被取走的文件。**只读，不清除。**
-
-### `getPendingFile()`
-
-```ts
-{ name: string, data: '<base64>' }   // 有
-{ name: null }                       // 没有
-```
-
-取走并**清空**待处理 URI（取一次就消费掉，避免重复导入）。
-
-### 为什么 `hasPendingFile` 与 `getPendingFile` 分开
+### 为什么 `hasPendingFile` 与 `openPendingFile` 分开
 
 `hasPendingFile` 很轻（只判空），网页在每次回到前台时都可以问一次；
-`getPendingFile` 要读整个文件并 base64 编码（可能几十 MB），只在确认有文件时才调。
+`openPendingFile` 会建立句柄并清理待处理状态，只在确认有文件时才调。
+
+### 为什么句柄保留 Uri 而不是只保留打开的流
+
+content URI 的读权限来自 Intent 授予，取走后仍然有效。句柄同时保留 Uri 与当前流：
+顺序读时直接续读；只有调用方要求非顺序 offset（或流在异常后被关闭）时才重新
+`openInputStream` + 完整 skip 到目标位置 —— 这样即使页面被系统暂停、流状态丢失，
+也能从任意 offset 继续读，且不会每块都重新打开 + skip（那是 O(n²) 拷贝）。
 
 ---
 
@@ -135,9 +160,14 @@ FileOpenPlugin.setPendingUri(uri);
 
 ## 实现要点
 
-- **48 MB 上限**：base64 会放大 4/3，48 MB 原始 ≈ 64 MB 字符串。再大 WebView 传参会爆。
-  会话 ZIP 正常在几百 KB 到几 MB，48 MB 已很宽松
-- **64 KiB 分块读**：`readAll()` 逐块读，避免一次性分配大数组
+- **单块 ≤ 256 KB**：一次桥调用的 base64 字符串约 341 KB，WebView 的 JSON 参数、
+  Java 的 byte[] 与 String 都只在这个量级上分配；整包 32 MB 的做法会同时产生
+  32 MB byte[] + 88 MB base64 String，是闪退的直接原因
+- **48 MB 上限保留**：文件大小优先从 `OpenableColumns.SIZE` 查，查不到再用
+  `AssetFileDescriptor.getLength()`；都拿不到就按块读到 EOF，并用累计字节数兜底
+- **临时文件先写缓存**：`beginBackup` 只建 `getCacheDir()/deepchat-backup/backup-*.part`，
+  `finishBackup` 才流式落到 Documents；失败/取消由 `abortBackup` 与 `handleOnDestroy`
+  删除，不会留下半截备份
 - **`DISPLAY_NAME` 从 `OpenableColumns` 取**：直接 `uri.getLastPathSegment()` 拿到的是
   一串数字 id，不是文件名
 - **base64 用 `Base64.NO_WRAP`**：默认编码器每 76 字符插换行，JS 的 `atob` 会解错
@@ -149,7 +179,7 @@ FileOpenPlugin.setPendingUri(uri);
 ```powershell
 # 1. 造一个合法的会话 ZIP（从应用内导出即可）
 # 2. 推到手机
-adb push deepseek_data-20261118.zip /sdcard/Download/
+adb push deepseek_data-<日期>.zip /sdcard/Download/
 
 # 3. 模拟「用其他应用打开」
 adb shell am start -a android.intent.action.VIEW `

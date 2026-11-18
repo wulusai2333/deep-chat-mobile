@@ -153,6 +153,40 @@ const scenario = async ({ label, scripts, before, probe = PROBE }) => {
   }
 }
 
+/**
+ * 让页面自己 reload，并等新文档完成首屏渲染。
+ *
+ * 为什么需要它：`before(browser)` 拿不到 server.url，所以只能用 `location.reload()`；
+ * 而 reload 提交的瞬间旧文档的执行上下文会被销毁，期间 CDP 求值会抛
+ * 「Execution context was destroyed」，固定 sleep 又分不清「还在旧文档」还是
+ * 「新文档已加载」（旧文档此时同样是渲染完成状态）。
+ * 做法：先在旧文档埋一个窗口标记，reload 后轮询标记消失 = 新文档已接管，
+ * 最后再等 React 重新挂载。
+ */
+const reloadPage = async (browser) => {
+  await browser.evaluate(`window.__ACCEPT_DOC_MARK__ = String(Date.now())`)
+  await browser.evaluate(`(location.reload(), true)`).catch(() => {
+    // 个别内核会在返回值序列化前就销毁上下文；导航本身已经发起，继续等新文档
+  })
+  const deadline = Date.now() + 15000
+  while (Date.now() < deadline) {
+    try {
+      if (await browser.evaluate(`typeof window.__ACCEPT_DOC_MARK__ === 'undefined'`)) {
+        break
+      }
+    } catch {
+      // reload 提交瞬间执行上下文被销毁，下一轮重试
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  await browser.waitFor(
+    `(() => { const root = document.getElementById('root'); return !!root && root.children.length > 0 })()`,
+    { timeoutMs: 15000, label: 'reload 后等待渲染' }
+  )
+  // 设置/会话列表都从 IndexedDB 异步恢复，留一点时间再断言
+  await browser.evaluate(`new Promise((resolve) => setTimeout(resolve, 500))`)
+}
+
 const main = async () => {
   step('构建产物验收（无头 Chromium）')
 
@@ -261,6 +295,411 @@ const main = async () => {
     insets.every((value) => /^\d+(\.\d+)?px$/.test(value)),
     'E3 值是可用的 px（不是 undefined / env() 原文）',
     insets
+  )
+
+  // ══ 场景 F：移动端 UI 结构（官方 App 风格）══
+  // 只验「结构在不在、能不能点开」：具体像素靠 pnpm ui:preview 的人工对比，
+  // 这里拦住的是「移动端覆盖层没进产物 / fork 没生效 / 按钮点不开」这类硬伤。
+  info('F. 移动端 UI 结构')
+  const MOBILE_PROBE = `(() => {
+    const text = (document.body.innerText || '')
+    const byLabel = (label) =>
+      [...document.querySelectorAll('button, [role="button"]')].find(
+        (node) => node.getAttribute('aria-label') === label
+      )
+    const rect = (node) => {
+      if (!node) return null
+      const r = node.getBoundingClientRect()
+      return { x: r.x, y: r.y, width: r.width, height: r.height }
+    }
+    const textarea = document.querySelector('textarea')
+    const root = document.getElementById('root')
+    return {
+      text,
+      rootChildren: root ? root.children.length : -1,
+      errors: window.__PAGE_ERRORS__ || [],
+      hasLogo: Boolean(document.querySelector('svg[role="img"][aria-label="DeepSeek"]')),
+      hasMenuButton: Boolean(byLabel('打开边栏')),
+      hasNewChatButton: Boolean(byLabel('开启新对话')),
+      hasReadButton: Boolean(byLabel('朗读') || byLabel('停止朗读')),
+      textareaPlaceholder: textarea ? textarea.getAttribute('placeholder') : null,
+      hasThinkingPill: text.includes('深度思考'),
+      hasSearchPill: text.includes('智能搜索'),
+      hasCaveat: text.includes('内容由 AI 生成'),
+      attachButton: rect(byLabel('添加附件')),
+      micButton: rect(byLabel('语音输入')),
+      probe: window.__MOBILE_PROBE__ || {},
+      // 搜索框是 <input>，placeholder 不进 innerText，要单独取
+      inputPlaceholders: [...document.querySelectorAll('input')].map((item) => item.getAttribute('placeholder')),
+    }
+  })()`
+
+  const mobile = await scenario({
+    label: 'mobile',
+    scripts: [ERROR_TRAP, makeBridge({ apiKey: 'sk-test-0123456789abcdef0123456789abcdef' }), `window.localStorage.clear()`],
+    before: async (browser) => {
+      await browser.setViewport({ width: 393, height: 852, scale: 2, mobile: true })
+      await browser.evaluate(`new Promise((r) => setTimeout(r, 700))`)
+      // 打开附件面板 → 记录结构 → 关闭
+      await browser.evaluate(`(async () => {
+        window.__MOBILE_PROBE__ = {}
+        const tap = (label) => {
+          const node = [...document.querySelectorAll('button, [role="button"]')].find(
+            (item) => item.getAttribute('aria-label') === label
+          )
+          if (node) node.click()
+          return Boolean(node)
+        }
+        tap('添加附件')
+        await new Promise((r) => setTimeout(r, 600))
+        window.__MOBILE_PROBE__.attachPanelText = (document.body.innerText || '')
+        // × 关闭面板
+        const close = [...document.querySelectorAll('button, [role="button"]')].find(
+          (item) => item.getAttribute('aria-label') === '关闭'
+        )
+        if (close) close.click()
+        await new Promise((r) => setTimeout(r, 400))
+        tap('语音输入')
+        await new Promise((r) => setTimeout(r, 600))
+        window.__MOBILE_PROBE__.voiceText = (document.body.innerText || '')
+        const keyboard = [...document.querySelectorAll('button, [role="button"]')].find(
+          (item) => item.getAttribute('aria-label') === '键盘输入'
+        )
+        if (keyboard) keyboard.click()
+        await new Promise((r) => setTimeout(r, 400))
+        tap('打开边栏')
+        await new Promise((r) => setTimeout(r, 700))
+        window.__MOBILE_PROBE__.drawerText = (document.body.innerText || '')
+        window.__MOBILE_PROBE__.drawerHtmlLen = document.body.innerHTML.length
+        window.__MOBILE_PROBE__.menuClicked = Boolean(
+          [...document.querySelectorAll('button, [role="button"]')].find(
+            (item) => item.getAttribute('aria-label') === '打开边栏'
+          )
+        )
+      })()`)
+    },
+    probe: MOBILE_PROBE,
+  })
+  const attachText = mobile.probe.attachPanelText || ''
+  const voiceText = mobile.probe.voiceText || ''
+  const drawerText = mobile.probe.drawerText || ''
+  check(mobile.rootChildren > 0, 'F1 移动端渲染出内容（非白屏）')
+  check(mobile.errors.length === 0, 'F2 移动端无未捕获异常', mobile.errors)
+  check(mobile.hasLogo === true, 'F3 欢迎页有鲸鱼 logo')
+  check(mobile.hasMenuButton === true, 'F4 顶栏有汉堡（打开边栏）')
+  check(mobile.hasNewChatButton === true, 'F5 顶栏有新建对话（⊕）')
+  check(mobile.hasReadButton === true, 'F6 顶栏有朗读按钮')
+  check(
+    mobile.textareaPlaceholder === '发消息或按住说话',
+    'F7 输入框占位符是官方文案',
+    mobile.textareaPlaceholder
+  )
+  check(mobile.hasThinkingPill && mobile.hasSearchPill, 'F8 输入框有深度思考/智能搜索药丸')
+  check(mobile.hasCaveat === false, 'F9 移动端不显示「内容由 AI 生成」')
+  check(mobile.attachButton !== null, 'F10 输入框有附件按钮（+）')
+  check(mobile.micButton !== null, 'F11 输入框有麦克风按钮')
+  check(
+    attachText.includes('拍照') && attachText.includes('相册') && attachText.includes('文件'),
+    'F12 点 + 打开附件面板（拍照 / 相册 / 文件）'
+  )
+  check(voiceText.includes('按住说话'), 'F13 点麦克风切到「按住说话」')
+  check(
+    mobile.inputPlaceholders.some((value) => (value || '').startsWith('搜索对话内容')) &&
+      drawerText.includes('本地用户'),
+    'F14 抽屉有搜索框与底部账户行',
+    mobile.inputPlaceholders.join(' | ')
+  )
+
+  // ══ 场景 G：朗读按钮的播放/停止开关态（F15）══
+  // 朗读按钮只有在「当前会话最后一条回答有正文」时才可点，而上面的移动端场景停在欢迎页
+  // （没有会话、按钮 disabled），所以这里单开一个隔离场景：
+  //   1. 直接往 IndexedDB 塞一条带助手正文的会话（库名/版本/存储与
+  //      web/src/services/chat/db.ts 一致），不为造数据改产品代码、也不模拟流式接口；
+  //   2. reload 一次让 initChat 读到该会话，再从抽屉点进会话页；
+  //   3. 把 POST /v1/tools/tts 挂起（永不 resolve），朗读状态停在 loading，
+  //      蓝喇叭状态可稳定断言（无头浏览器里本来也听不到声音，等真实音频首帧只会超时）。
+  // 断言口径：朗读中 aria-pressed / data-reading 为 true、aria-label 变「停止朗读」、
+  // 计算出的颜色是 --m-brand(#4d6bfe)；再点同一个按钮回到 false /「朗读」/ 非品牌蓝。
+  info('G. 朗读按钮播放/停止态')
+
+  /** 只把 TTS 请求挂起，其余请求（/models、/anthropic/...）照常走真实 fetch */
+  const TTS_HANG = `
+  (() => {
+    const originalFetch = window.fetch.bind(window)
+    window.fetch = (input, init) => {
+      const url = typeof input === 'string' ? input : (input && input.url) || ''
+      if (url.includes('/v1/tools/tts')) {
+        window.__TTS_STUBBED__ = (window.__TTS_STUBBED__ || 0) + 1
+        // 永不 settle：朗读停在 loading（等价于真实环境里等待音频首帧的网络延迟）
+        return new Promise(() => {})
+      }
+      return originalFetch(input, init)
+    }
+  })()
+  `
+
+  /**
+   * 无头浏览器没有音频输出设备（启动参数还带 --mute-audio），点朗读会构造 AudioContext。
+   * 这里换成最小替身，只保留朗读流程会碰到的字段/方法：断言的是「开关态 + 颜色」，
+   * 不是真的出声；真机音频仍按 docs/build.md §9.1 的人工清单验收。
+   */
+  const AUDIO_STUB = `
+  (() => {
+    class StubAudioContext {
+      constructor() {
+        this.currentTime = 0
+        this.destination = {}
+        this.state = 'running'
+      }
+      createBuffer() {
+        return { duration: 0, copyToChannel() {} }
+      }
+      createBufferSource() {
+        return { buffer: null, connect() {}, start() {}, onended: null }
+      }
+      close() {
+        return Promise.resolve()
+      }
+    }
+    window.AudioContext = StubAudioContext
+  })()
+  `
+
+  /**
+   * 往 IndexedDB 塞一条会话：用户提问 + 助手正文回答。
+   * 字段形状对齐 services/chat/types.ts；不写 rootMessageId，
+   * 让 App 的 normalizeSession 按线性列表补齐分支字段。
+   */
+  const READING_SEED = `
+  (async () => {
+    const now = Date.now()
+    const session = {
+      id: 'accept-reading-session',
+      title: '朗读验收',
+      createdAt: now - 60000,
+      updatedAt: now,
+      messages: [
+        {
+          id: 'accept-reading-question',
+          role: 'user',
+          content: '你好',
+          files: [],
+          createdAt: now - 60000,
+        },
+        {
+          id: 'accept-reading-reply',
+          role: 'assistant',
+          createdAt: now - 59000,
+          model: 'deepseek-flash',
+          thinking: false,
+          search: false,
+          prefix: true,
+          status: 'done',
+          blocks: [{ type: 'text', text: '这是一条用于验收朗读按钮开关态的回答。' }],
+        },
+      ],
+    }
+    const summary = {
+      id: session.id,
+      title: session.title,
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt,
+      fileIds: [],
+    }
+    const db = await new Promise((resolve, reject) => {
+      const request = indexedDB.open('chat-demo', 11)
+      request.onupgradeneeded = () => {
+        const database = request.result
+        for (const name of ['sessions', 'files', 'sessionsStaging', 'filesStaging']) {
+          if (!database.objectStoreNames.contains(name)) {
+            database.createObjectStore(name, { keyPath: 'id' })
+          }
+        }
+        const summaries = database.objectStoreNames.contains('sessionSummaries')
+          ? request.transaction.objectStore('sessionSummaries')
+          : database.createObjectStore('sessionSummaries', { keyPath: 'id' })
+        if (!summaries.indexNames.contains('fileIds')) {
+          summaries.createIndex('fileIds', 'fileIds', { multiEntry: true })
+        }
+      }
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error)
+    })
+    await new Promise((resolve, reject) => {
+      const transaction = db.transaction(['sessions', 'sessionSummaries'], 'readwrite')
+      transaction.objectStore('sessions').put(session)
+      transaction.objectStore('sessionSummaries').put(summary)
+      transaction.oncomplete = resolve
+      transaction.onerror = () => reject(transaction.error)
+      transaction.onabort = () => reject(transaction.error)
+    })
+    db.close()
+    window.__READING_SEEDED__ = true
+    return true
+  })().catch((error) => {
+    window.__READING_SEED_ERROR__ = String((error && error.message) || error)
+    return false
+  })
+  `
+
+  const READALOUD_PROBE = `(() => ({
+    errors: window.__PAGE_ERRORS__ || [],
+    probe: window.__READALOUD_PROBE__ || {},
+  }))()`
+
+  const readAloud = await scenario({
+    label: 'mobile-readaloud',
+    scripts: [
+      ERROR_TRAP,
+      makeBridge({ apiKey: 'sk-test-0123456789abcdef0123456789abcdef' }),
+      TTS_HANG,
+      AUDIO_STUB,
+      `window.localStorage.clear()`,
+    ],
+    before: async (browser) => {
+      await browser.setViewport({ width: 393, height: 852, scale: 2, mobile: true })
+      await browser.evaluate(`new Promise((resolve) => setTimeout(resolve, 700))`)
+
+      // 1) 写入带助手正文的会话；写成功前 reload 会让 initChat 读不到它
+      const seeded = await browser.evaluate(READING_SEED)
+
+      // 2) reload，让 initChat 重新读会话列表（首次加载时列表是空的）
+      await reloadPage(browser)
+      // 会话列表是异步从 IndexedDB 恢复的：等抽屉里出现种子会话那一行再操作
+      const rowReady = await browser
+        .waitFor(
+          `[...document.querySelectorAll('[role="button"]')].some((node) => (node.textContent || '').trim() === '朗读验收')`,
+          { timeoutMs: 5000, label: '抽屉里有种子会话' }
+        )
+        .then(() => true)
+        .catch(() => false)
+
+      // 3) 打开抽屉 → 点种子会话 → 进入会话页（欢迎页的朗读按钮是 disabled 的）
+      const opened = await browser.evaluate(`(async () => {
+        const tap = (label) => {
+          const node = [...document.querySelectorAll('button, [role="button"]')].find(
+            (item) => item.getAttribute('aria-label') === label
+          )
+          if (node) node.click()
+          return Boolean(node)
+        }
+        tap('打开边栏')
+        await new Promise((resolve) => setTimeout(resolve, 700))
+        const row = [...document.querySelectorAll('[role="button"]')].find(
+          (node) => (node.textContent || '').trim() === '朗读验收'
+        )
+        if (row) row.click()
+        return Boolean(row)
+      })()`)
+      // 会话页顶栏的朗读按钮才是可用的（欢迎页那个 disabled）
+      const readButtonReady = await browser
+        .waitFor(
+          `[...document.querySelectorAll('button')].some((node) => node.getAttribute('aria-label') === '朗读' && !node.disabled)`,
+          { timeoutMs: 5000, label: '会话页朗读按钮可用' }
+        )
+        .then(() => true)
+        .catch(() => false)
+
+      // 4) 点朗读按钮（用户真实点的是同一个喇叭按钮，不换图标）
+      //    这里用 JS click 而不是坐标触摸：按钮在会话页要等主界面从抽屉左移的 300ms
+      //    过渡结束才回到固定位置，坐标点击会打在过渡中的位置；而本项断言的是
+      //    class/颜色/aria 状态，不依赖 :active / :hover 这类只有真实指针才有的样式。
+      const clickReadButton = () =>
+        browser.evaluate(`(() => {
+          const node = [...document.querySelectorAll('button')].find(
+            (item) => item.hasAttribute('data-reading')
+          )
+          if (!node || node.disabled) return false
+          node.click()
+          return true
+        })()`)
+      const readState = () =>
+        browser.evaluate(`(() => {
+          const node = [...document.querySelectorAll('button')].find(
+            (item) => item.hasAttribute('data-reading')
+          )
+          if (!node) return null
+          return {
+            pressed: node.getAttribute('aria-pressed'),
+            reading: node.getAttribute('data-reading'),
+            label: node.getAttribute('aria-label'),
+            // 比 class 名更贴近「用户看到的蓝」：不受 CSS Modules 哈希影响
+            color: getComputedStyle(node).color,
+          }
+        })()`)
+
+      await clickReadButton()
+      // 最多 2s 轮询到朗读态（loading 被 stub 挂住，不会自己回到 idle）
+      let active = null
+      const activeDeadline = Date.now() + 2000
+      while (Date.now() < activeDeadline) {
+        const state = await readState()
+        if (state && state.reading === 'true') {
+          active = state
+          break
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100))
+      }
+
+      // 5) 再点一次 = 停止，回到 idle（深色喇叭）
+      let idle = null
+      if (active) {
+        await clickReadButton()
+        const idleDeadline = Date.now() + 2000
+        while (Date.now() < idleDeadline) {
+          const state = await readState()
+          if (state && state.reading === 'false') {
+            idle = state
+            break
+          }
+          await new Promise((resolve) => setTimeout(resolve, 100))
+        }
+      }
+
+      const ttsStubbed = await browser.evaluate(`window.__TTS_STUBBED__ || 0`).catch(() => 0)
+      await browser.evaluate(
+        `window.__READALOUD_PROBE__ = ${JSON.stringify({
+          seeded: seeded === true,
+          rowReady,
+          opened,
+          readButtonReady,
+          active,
+          idle,
+          ttsStubbed,
+        })}`
+      )
+    },
+    probe: READALOUD_PROBE,
+  })
+  const readAloudProbe = readAloud.probe || {}
+  const activeState = readAloudProbe.active || null
+  const idleState = readAloudProbe.idle || null
+  const isBrandBlue = (color) => /^rgb\(\s*77,\s*107,\s*254\s*\)$/.test(String(color || ''))
+  check(
+    readAloudProbe.seeded === true &&
+      readAloudProbe.opened === true &&
+      readAloudProbe.readButtonReady === true &&
+      activeState !== null &&
+      activeState.reading === 'true' &&
+      activeState.pressed === 'true' &&
+      activeState.label === '停止朗读' &&
+      isBrandBlue(activeState.color) &&
+      readAloudProbe.ttsStubbed >= 1 &&
+      idleState !== null &&
+      idleState.reading === 'false' &&
+      idleState.pressed === 'false' &&
+      idleState.label === '朗读' &&
+      !isBrandBlue(idleState.color),
+    'F15 朗读中喇叭变蓝、再点停止回到空闲',
+    {
+      seeded: readAloudProbe.seeded,
+      rowReady: readAloudProbe.rowReady,
+      opened: readAloudProbe.opened,
+      readButtonReady: readAloudProbe.readButtonReady,
+      ttsStubbed: readAloudProbe.ttsStubbed,
+      active: activeState,
+      idle: idleState,
+    }
   )
 
   // ══ 汇总 ══

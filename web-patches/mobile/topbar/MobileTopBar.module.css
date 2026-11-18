@@ -1,0 +1,76 @@
+/**
+ * 移动端顶栏样式 —— web-patches/mobile/topbar/MobileTopBar.module.css
+ *
+ * 尺寸见 docs/mobile-ui-spec.md §2.2（按官方截图反推）：
+ *   高 60px、左右 padding 14px、无边框；汉堡/喇叭/⊕ 都是 24px；右侧两个图标盒间距 24px。
+ * 安全区的顶部留白由 web-patches/safe-area.css 统一加在 App 根容器 .frame 上，
+ * 这里不能再加一次（会变成双倍留白）。
+ */
+
+.topbar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  /* 60px 是 spec §2.2 的实测值；等 common/mobile.css 的 --m-topbar-height 同步更新后可换成 var */
+  height: 60px;
+  padding: 0 14px;
+  color: var(--m-text);
+}
+
+.action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 120ms var(--m-ease, cubic-bezier(0.4, 0, 0.2, 1));
+}
+
+.action:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.action:disabled {
+  cursor: default;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 24px;
+  margin-left: auto;
+}
+
+/* 标题在屏幕正中间（相对整个顶栏绝对定位），不随左右图标数量偏移。
+   两边留白按「左汉堡 24 + 右两个 24 图标 + 间距」预留，长标题只在中间省略。 */
+.title {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  max-width: calc(100% - 160px);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  text-align: center;
+  font-size: 16px;
+  line-height: 22px;
+  font-weight: 500;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+/* 朗读中（loading / playing）：官方 App 只把喇叭变成品牌蓝，没有背景块、不改尺寸。
+   状态本身由组件的 aria-pressed / data-reading 与 aria-label 输出，这里只管颜色；
+   多条规则同优先级时后写的覆盖 .action 的 color: inherit。 */
+.active {
+  color: var(--m-brand, #4d6bfe);
+}

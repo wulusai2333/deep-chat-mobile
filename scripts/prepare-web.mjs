@@ -24,6 +24,7 @@ import {
   run,
   step,
 } from './lib/env.mjs'
+import { applyMobileOverrides, injectMobileSources } from './lib/mobile-overrides.mjs'
 
 const args = new Set(process.argv.slice(2))
 const shouldInstall = args.has('--install')
@@ -152,6 +153,55 @@ const replaceOnce = (file, marker, from, to) => {
   }
   writeFileSync(full, restore(text.replace(from, to)))
   info(`${file}: 已替换`)
+}
+
+/**
+ * 插入或更新一段带首尾标记的代码块。
+ *
+ * `insertOnce` 只在标记不存在时插入。补丁自身的实现需要升级时（例如本轮把
+ * `collectStagingFileTypes` 从 getAll 改成游标遍历），已经打过补丁的 `web/`
+ * 会被「跳过」，旧实现就永远留在那里 —— 这份 `web/` 是可再生的，但重新
+ * clone 一次代价很高。所以这里用首尾标记定位旧块并整段替换：
+ * 内容一致时不写盘（幂等），不一致时更新成新版本。
+ */
+const upsertBlock = (file, startMarker, endMarker, anchor, snippet, position = 'before') => {
+  const full = join(paths.web, file)
+  mustExist(full, '上游文件缺失，可能改了目录结构')
+  const { text, restore } = readSource(full)
+  const start = text.indexOf(startMarker)
+  if (start >= 0) {
+    const end = text.indexOf(endMarker, start)
+    if (end < 0) {
+      fail(`${file}: 补丁块缺少结束标记，无法更新`, `期望结束标记：${endMarker}`)
+    }
+    const current = text.slice(start, end + endMarker.length)
+    const next = snippet.trimEnd()
+    if (current === next) {
+      info(`${file}: 补丁块已是最新，跳过`)
+      return
+    }
+    writeFileSync(
+      full,
+      restore(text.slice(0, start) + next + text.slice(end + endMarker.length))
+    )
+    info(`${file}: 已更新补丁块`)
+    return
+  }
+  if (!text.includes(anchor)) {
+    fail(
+      `${file}: 找不到锚点，无法打补丁`,
+      [
+        '上游实现已变更，需要人工确认新位置后更新 scripts/prepare-web.mjs。',
+        `期望锚点：${JSON.stringify(anchor.slice(0, 80))}`,
+      ].join('\n')
+    )
+  }
+  const next =
+    position === 'after'
+      ? text.replace(anchor, `${anchor}${snippet}`)
+      : text.replace(anchor, `${snippet}${anchor}`)
+  writeFileSync(full, restore(next))
+  info(`${file}: 已插入补丁块`)
 }
 
 /**
@@ -369,18 +419,22 @@ if (typeof window !== 'undefined') {
   for (const [user] of getContextRounds(request.history).slice().reverse()) {`
   )
 
-  // ── 补丁 5：db.ts 增加合并导入所需的三个暂存辅助函数 ──────────────────────
+  // ── 补丁 5：db.ts 增加合并导入所需的暂存辅助函数 ──────────────────────────
   // 上游 commitStaging 是「清空正式表 → 从暂存搬入」，暂存里必须是完整目标状态。
   // 想复用它的原子性做「合并」，就得先把现有数据复制进暂存，让暂存成为并集。
   // 详见 patches/db.merge.ts 的文件头。
-  insertOnce(
-    'src/services/chat/db.ts',
-    'mobile-shell: merge staging helpers',
-    'export const addStagingSession = async (session: Session): Promise<void> => {',
-    `// ── mobile-shell: merge staging helpers ────────────────────────────────────
+  //
+  // 用 upsertBlock 而不是 insertOnce：本轮把 collectStagingFileTypes 从
+  // getAll 改成游标遍历、新增 putStagingSessions 批量写，补丁内容必须能在
+  // 已经打过旧补丁的 web/ 上更新，否则旧实现会一直留在那里。
+  const MERGE_HELPERS_START =
+    '// ── mobile-shell: merge staging helpers ────────────────────────────────────'
+  const MERGE_HELPERS_END =
+    '// ── mobile-shell: merge staging helpers end ────────────────────────────────'
+  const MERGE_HELPERS = `${MERGE_HELPERS_START}
 // 合并导入需要把「现有数据 + 导入数据」的并集交给 commitStaging，
 // 但上游只提供了 add 语义的 addStagingSession 和清空用的 clearStaging。
-// 这里新增三个函数，全部只服务合并导入，不改变任何既有函数的行为。
+// 这里新增辅助函数，全部只服务合并导入，不改变任何既有函数的行为。
 // 完整说明见 patches/db.merge.ts。
 export const stageCurrentHistory = async (): Promise<void> => {
   const db = await getDB()
@@ -411,13 +465,94 @@ export const stageCurrentHistory = async (): Promise<void> => {
   await tx.done
 }
 
+/**
+ * 批量写入暂存会话：一个批次一个事务。
+ *
+ * 【为什么必须批量】593 条会话逐条 put 就是 593 个 IndexedDB 事务，
+ * 每次提交都要等落盘；合并导入的主循环因此被拖到分钟级。按 20–32 条一批后
+ * 只剩约 20–30 个事务。事务语义不变：写入失败仍是整批失败，由调用方中止导入
+ * （commitStaging 才是原子替换点，暂存写失败不会动正式数据）。
+ */
+export const putStagingSessions = async (sessions: readonly Session[]): Promise<void> => {
+  if (sessions.length === 0) {
+    return
+  }
+  const tx = (await getDB()).transaction('sessionsStaging', 'readwrite')
+  await Promise.all([...sessions.map((session) => tx.store.put(session)), tx.done])
+}
+
 export const putStagingSession = async (session: Session): Promise<void> => {
   await (await getDB()).put('sessionsStaging', session)
 }
 
+/**
+ * 只给「本次新写入、且带图片」的暂存会话回填 MIME。
+ *
+ * 【为什么不像 updateStagingFileTypes 那样全量扫描】
+ * 上游的 updateStagingFileTypes 会遍历全部暂存会话，而合并导入的暂存里
+ * 是「现有 593 条 + 导入 593 条」的大集合：再读一遍 35 MB JSON 只为改几十个
+ * 图片附件，纯属浪费（真机上是秒级）。合并语义下：
+ *   • 现有会话是整条复制进暂存的，MIME 原样保留，不需要回填；
+ *   • 导入会话的附件 MIME 由 toLocalSession 初始化为 ''，只有图片原件在 ZIP 里，
+ *     所以只需要把嗅探到的类型写到「引用了这些图片的导入会话」上。
+ * 结果与全量扫描完全等价，读取量从 593 条降到「带图片的会话数」。
+ */
+export const updateStagingImageTypes = async (
+  types: ReadonlyMap<string, string>,
+  sessionIds: readonly string[]
+): Promise<void> => {
+  if (sessionIds.length === 0 || types.size === 0) {
+    return
+  }
+  const tx = (await getDB()).transaction('sessionsStaging', 'readwrite')
+  await Promise.all([
+    (async () => {
+      for (const id of sessionIds) {
+        const session = await tx.store.get(id)
+        if (!session) {
+          continue
+        }
+        let changed = false
+        for (const message of session.messages) {
+          if (message.role !== 'user') {
+            continue
+          }
+          for (const file of message.files) {
+            const type = types.get(file.id)
+            if (type !== undefined && file.mimeType !== type) {
+              file.mimeType = type
+              changed = true
+            }
+          }
+        }
+        if (changed) {
+          await tx.store.put(session)
+        }
+      }
+    })(),
+    tx.done,
+  ])
+}
+
+/**
+ * 游标遍历暂存会话收集附件 MIME。
+ *
+ * 【为什么不能 getAll】旧实现 getAll('sessionsStaging') 会把 593 条会话
+ * （35 MB JSON）一次性反序列化进 JS 堆。实测真实归档导入峰值堆 225 MB，
+ * 在 128–256 MB 堆的低端机上直接 OOM 闪退。游标同一时间只持有一条记录，
+ * 峰值内存与「最大的单条会话」成正比，与总条数无关。
+ * （合并导入主流程不再全量扫描，而是用 updateStagingImageTypes 定向回填；
+ * 本函数作为独立读取入口保留，并覆盖回归测试。）
+ */
 export const collectStagingFileTypes = async (): Promise<Map<string, string>> => {
   const types = new Map<string, string>()
-  for (const session of await (await getDB()).getAll('sessionsStaging')) {
+  const tx = (await getDB()).transaction('sessionsStaging', 'readonly')
+  for (
+    let cursor = await tx.store.openCursor();
+    cursor;
+    cursor = await cursor.continue()
+  ) {
+    const session = cursor.value
     for (const message of session.messages) {
       if (message.role !== 'user') {
         continue
@@ -429,10 +564,17 @@ export const collectStagingFileTypes = async (): Promise<Map<string, string>> =>
       }
     }
   }
+  await tx.done
   return types
 }
-// ── mobile-shell: merge staging helpers end ────────────────────────────────
-`,
+${MERGE_HELPERS_END}
+`
+  upsertBlock(
+    'src/services/chat/db.ts',
+    MERGE_HELPERS_START,
+    MERGE_HELPERS_END,
+    'export const addStagingSession = async (session: Session): Promise<void> => {',
+    MERGE_HELPERS,
     'before'
   )
 
@@ -556,6 +698,228 @@ export const exportHistory = (): Promise<{ name: string; blob: Blob }> =>
     return replaceHistory(() => importArchive(file))
   })`
   )
+
+  // ── 补丁 18：移动端设置分组用「主色文字 + 底部指示条」表示选中 ────────────────
+  // 【真实反馈】点了「数据管理」，它变成一块淡灰底，看起来像「变暗/被禁用」；
+  // 而横排的「通用设置」反而像这一页的标题，整个面板读起来像通用设置的子菜单。
+  // 原因是桌面端用「灰色底块」表示当前项（左侧竖排导航里读得出来），
+  // 但同一套样式搬到手机横排 tab 上，深色底几乎不可见，语义完全丢失。
+  // 移动端 tab 的通行做法是「文字变主色 + 底部一条指示条」，
+  // 指示条直接把「我在哪一页」画出来，不依赖底色深浅。
+  replaceOnce(
+    'src/components/settings/Settings.module.css',
+    'mobile-shell: mobile tab indicator',
+    `  .navItem {
+    flex: 1 0 auto;
+    justify-content: center;
+    width: auto;
+    min-width: 108px;
+    margin: 0;
+    white-space: nowrap;
+
+    &:first-child {
+      margin-left: 4px;
+    }
+
+    &:last-child {
+      margin-right: 4px;
+    }
+  }`,
+    `  .navItem {
+    flex: 1 0 auto;
+    justify-content: center;
+    width: auto;
+    min-width: 108px;
+    margin: 0;
+    white-space: nowrap;
+
+    /* mobile-shell: mobile tab indicator —— 横排 tab 用主色文字 + 底部指示条表示选中，
+       不要沿用桌面端的灰色底块（在手机上看起来像禁用，见补丁注释） */
+    position: relative;
+    border-radius: 0;
+    background-color: transparent;
+    color: var(--dsw-alias-label-secondary);
+
+    &:hover {
+      background-color: transparent;
+      color: var(--dsw-alias-label-primary);
+    }
+
+    &.navItemActive {
+      background-color: transparent;
+      color: var(--dsw-alias-brand-primary);
+      font-weight: 600;
+    }
+
+    &.navItemActive::after {
+      content: '';
+      position: absolute;
+      bottom: 0;
+      left: 50%;
+      width: 24px;
+      height: 3px;
+      border-radius: 2px;
+      background-color: var(--dsw-alias-brand-primary);
+      transform: translateX(-50%);
+    }
+
+    &:first-child {
+      margin-left: 4px;
+    }
+
+    &:last-child {
+      margin-right: 4px;
+    }
+  }`
+  )
+
+  // ── 补丁 19：导出「条目总数」查询，供导入进度使用 ────────────────────────────
+  // 【为什么需要】导入大归档要几分钟，期间必须给出百分比进度，
+  // 否则用户以为卡死。readArchive 是流式的，不告诉调用方还剩多少；
+  // 而中央目录里本来就有全部条目，数一遍只需读文件末尾一段，
+  // 不会像「再解压一遍来计数」那样让导入耗时翻倍。
+  replaceOnce(
+    'src/services/chat/history/zipReader.ts',
+    'mobile-shell: count zip entries',
+    `export async function* readArchive(file: File): AsyncGenerator<ArchiveEntry> {
+  const directory = await readDirectory(file)`,
+    `/**
+ * mobile-shell: count zip entries —— 只读中央目录，返回可读条目数（不含目录项）。
+ *
+ * 供导入进度计算百分比用。只解析目录、不解压任何条目，
+ * 因此在 30 MB 级别的归档上也只是读末尾几十 KB。
+ */
+export const countZipEntries = async (file: File): Promise<number> => {
+  const directory = await readDirectory(file)
+  return directory.entries.filter((entry) => !entry.path.endsWith('/')).length
+}
+
+export async function* readArchive(file: File): AsyncGenerator<ArchiveEntry> {
+  const directory = await readDirectory(file)`
+  )
+
+  // ── 补丁 19b：中央目录只解析一次 ─────────────────────────────────────────────
+  // 导入流程会对同一个 File 解析三遍目录：
+  //   checkArchiveFormat()（校验 manifest）→ countZipEntries()（进度总数）→ readArchive()（正式遍历）。
+  // 每次都要对 677 个条目做「读 46 字节头 + 读文件名 + 读 extra」的异步 File 读取，
+  // 真机上是几千次小块读取（实测桌面端一遍约 0.4 s，手机上更贵）。
+  // 用 WeakMap 按 File 缓存目录解析结果，三处共用一次。
+  // File 是不可变 Blob，按对象缓存不会读到过期内容；WeakMap 条目随 File 一起回收。
+  insertOnce(
+    'src/services/chat/history/zipReader.ts',
+    'mobile-shell: cached zip directory',
+    'const readDirectory = async (file: File): Promise<{ entries: Entry[]; offset: number }> => {',
+    `// mobile-shell: cached zip directory —— 一次导入里 checkArchiveFormat / countZipEntries /
+// readArchive 会各解析一遍中央目录；缓存后只解析一次（目录本身很小，677 条目）。
+const directoryCache = new WeakMap<File, Promise<{ entries: Entry[]; offset: number }>>()
+const readDirectoryCached = (file: File): Promise<{ entries: Entry[]; offset: number }> => {
+  let pending = directoryCache.get(file)
+  if (!pending) {
+    pending = readDirectory(file)
+    directoryCache.set(file, pending)
+    void pending.catch(() => {
+      directoryCache.delete(file)
+    })
+  }
+  return pending
+}
+
+`,
+    'before'
+  )
+
+  replaceOnce(
+    'src/services/chat/history/zipReader.ts',
+    'mobile-shell: cached directory in count',
+    `export const countZipEntries = async (file: File): Promise<number> => {
+  const directory = await readDirectory(file)`,
+    `export const countZipEntries = async (file: File): Promise<number> => {
+  // mobile-shell: cached directory in count —— 与 checkArchiveFormat / readArchive 共用目录解析结果
+  const directory = await readDirectoryCached(file)`
+  )
+
+  replaceOnce(
+    'src/services/chat/history/zipReader.ts',
+    'mobile-shell: cached directory in readArchive',
+    `export async function* readArchive(file: File): AsyncGenerator<ArchiveEntry> {
+  const directory = await readDirectory(file)`,
+    `export async function* readArchive(file: File): AsyncGenerator<ArchiveEntry> {
+  // mobile-shell: cached directory in readArchive —— 与 checkArchiveFormat / countZipEntries 共用
+  const directory = await readDirectoryCached(file)`
+  )
+
+  // ── 补丁 20：移动端官方 App 风格文案 ─────────────────────────────────────
+  // 这次移动端改版按官方 Android App 的截图重做（见 docs/mobile-ui-spec.md），
+  // 需要一批上游没有的文案：欢迎语、按住说话、拍照/相册/文件、搜索对话内容等。
+  // 插在语言表末尾，桌面端不引用这些键，行为完全不受影响。
+  const ZH_STRINGS = `  // ── mobile-ui: mobile strings zh —— 官方 App 风格的移动端文案（见 docs/mobile-ui-spec.md）
+  welcomeBackGreeting: '欢迎回来，想从哪里开始？',
+  chatInputPlaceholderMobile: '发消息或按住说话',
+  addAttachment: '添加附件',
+  camera: '拍照',
+  album: '相册',
+  fileAttachment: '文件',
+  holdToTalk: '按住说话',
+  releaseToSend: '松开发送，上滑取消',
+  voiceTranscribing: '正在转写…',
+  voiceTooShort: '说话时间太短',
+  voiceInputKeyboard: '键盘输入',
+  searchConversations: '搜索对话内容…',
+  searching: '搜索中…',
+  searchNoResults: '未找到相关对话',
+  clearSearch: '清除',
+  localAccountName: '本地用户',
+  theme: '主题',
+`
+
+  const EN_STRINGS = `  // ── mobile-ui: mobile strings en —— 见 zh.ts 同名补丁
+  welcomeBackGreeting: 'Welcome back. Where shall we start?',
+  chatInputPlaceholderMobile: 'Message or hold to talk',
+  addAttachment: 'Add attachment',
+  camera: 'Camera',
+  album: 'Photos',
+  fileAttachment: 'Files',
+  holdToTalk: 'Hold to talk',
+  releaseToSend: 'Release to send, swipe up to cancel',
+  voiceTranscribing: 'Transcribing…',
+  voiceTooShort: 'Too short, please try again',
+  voiceInputKeyboard: 'Keyboard',
+  searchConversations: 'Search chats…',
+  searching: 'Searching…',
+  searchNoResults: 'No matching chats',
+  clearSearch: 'Clear',
+  localAccountName: 'Local user',
+  theme: 'Theme',
+`
+
+  replaceOnce(
+    'src/i18n/zh.ts',
+    'mobile-ui: mobile strings zh',
+    `  settingsLocaleEnUS: 'English',
+} as const`,
+    `${ZH_STRINGS}  settingsLocaleEnUS: 'English',
+} as const`
+  )
+
+  replaceOnce(
+    'src/i18n/en.ts',
+    'mobile-ui: mobile strings en',
+    `  settingsLocaleEnUS: 'English',
+} satisfies Record<keyof typeof zh, string>`,
+    `${EN_STRINGS}  settingsLocaleEnUS: 'English',
+} satisfies Record<keyof typeof zh, string>`
+  )
+
+  // ── 补丁 21：引入移动端全局样式（tokens / 主题 / 列表留白）────────────────
+  // 必须排在 global.css 之后：同名 CSS 变量要靠后加载覆盖。
+  replaceOnce(
+    'src/main.tsx',
+    'mobile-ui: mobile css',
+    "import './app/global.css'",
+    `import './app/global.css'
+// mobile-ui: mobile css —— 移动端官方 App 风格的 tokens 与全局修正（web-patches/mobile/common/mobile.css）
+import './mobile/common/mobile.css'`
+  )
 }
 
 const main = async () => {
@@ -576,6 +940,12 @@ const main = async () => {
 
   step('注入壳文件')
   injectShell()
+
+  step('注入移动端覆盖层')
+  injectMobileSources()
+
+  step('应用移动端 fork')
+  await applyMobileOverrides()
 
   step('应用上游补丁')
   applyPatches()

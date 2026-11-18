@@ -1,0 +1,16 @@
+{
+  "area": "drawer",
+  "owner": "drawer",
+  "overrides": [
+    {
+      "to": "src/components/sider/Sider.tsx",
+      "from": "overrides/sider/Sider.tsx",
+      "upstreamSha256": "e812d4fe37554b57896d46275f528d1b9e0b186fc70fbc27e1f4dba929d554fe"
+    },
+    {
+      "to": "src/components/sider/Sider.module.css",
+      "from": "overrides/sider/Sider.module.css",
+      "upstreamSha256": "aac3b591f1c984205f8f8c5c6732b23b8f2054993b7c22a40df392ec0a658fe0"
+    }
+  ]
+}

@@ -14,7 +14,8 @@ import { writeArchive } from '../web/src/services/chat/history/zipWriter.js'
 // 必须从 web/src/shell/ 引入，而不是 web-patches/：
 // 注入后的文件在那里，导入路径（../services/...）才成立。
 // 这样测的就是**实际进 APK 的那份代码**，而不是一份结构不同的副本。
-import { installImportBridge, mergeImport } from '../web/src/shell/import-bridge.js'
+import { consumePendingFile, installImportBridge, mergeImport } from '../web/src/shell/import-bridge.js'
+import type { Session } from '../web/src/services/chat/types.js'
 
 const log = (message) => console.log(`[test] ${message}`)
 
@@ -30,6 +31,16 @@ const PNG_1PX =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
 
 const base64ToBytes = (value) => Uint8Array.from(atob(value), (c) => c.charCodeAt(0))
+
+/** Uint8Array → base64，模拟原生桥每块返回的字符串（分块读路径用） */
+const bytesToBase64 = (bytes) => {
+  let binary = ''
+  const CHUNK = 0x8000
+  for (let offset = 0; offset < bytes.length; offset += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + CHUNK))
+  }
+  return btoa(binary)
+}
 
 /** 造一条消息 */
 const msg = (id, parentId, role, text, insertedAt, files) => ({
@@ -318,13 +329,90 @@ const run = async () => {
   // 就是「队列里的任务等一个排在它后面的任务」，队列永不前进。
   // 这个 bug 实际发生过：真机导入卡死、0 条会话进库，而 31 项测试全绿。
   // 所以这里伪造 window.Capacitor 让 isNativeShell() 为 true，走真实路径。
-  const nativeCalls = []
-  ;(globalThis as any).Capacitor = {
-    nativePromise: async (plugin: string, method: string) => {
-      nativeCalls.push(`${plugin}.${method}`)
-      return method === 'saveBackup' ? { path: '/fake/deep-chat-backup.zip' } : {}
-    },
+  /** 内存里的原生桥桩：分块备份上传 + 分块文件读取都在这里模拟 */
+  const installNativeStub = (
+    pendingBytes?: Uint8Array,
+    stubOptions: { failAppendAt?: number } = {}
+  ) => {
+    const calls: string[] = []
+    const backup = {
+      begin: false,
+      chunks: 0,
+      bytes: 0,
+      finished: false,
+      aborted: false,
+      appends: 0,
+    }
+    const uploads = new Map<string, { chunks: number; bytes: number }>()
+    let nextUpload = 0
+    const pending = pendingBytes === undefined ? null : { bytes: pendingBytes, offset: 0 }
+    ;(globalThis as any).Capacitor = {
+      nativePromise: async (_plugin: string, method: string, args: any) => {
+        calls.push(method)
+        const options = args ?? {}
+        switch (method) {
+          case 'hasPendingFile':
+            return { pending: pending !== null }
+          case 'openPendingFile':
+            if (!pending) {
+              return { name: null }
+            }
+            pending.offset = 0
+            return { handle: 'stub-handle', name: 'stub.zip', size: pending.bytes.length }
+          case 'readPendingFileChunk': {
+            if (!pending) {
+              throw new Error('readPendingFileChunk without pending file')
+            }
+            const offset = Number(options.offset)
+            const length = Number(options.length)
+            const end = Math.min(offset + length, pending.bytes.length)
+            const slice = pending.bytes.subarray(offset, end)
+            return {
+              data: bytesToBase64(slice),
+              size: slice.length,
+              offset,
+              eof: end >= pending.bytes.length,
+            }
+          }
+          case 'closePendingFile':
+            return { closed: true }
+          case 'beginBackup': {
+            const uploadId = `test-upload-${++nextUpload}`
+            uploads.set(uploadId, { chunks: 0, bytes: 0 })
+            backup.begin = true
+            return { uploadId }
+          }
+          case 'appendBackupChunk': {
+            const upload = uploads.get(String(options.uploadId))
+            if (!upload) {
+              throw new Error('appendBackupChunk for unknown upload')
+            }
+            backup.appends += 1
+            if (stubOptions.failAppendAt !== undefined && backup.appends === stubOptions.failAppendAt) {
+              throw new Error('simulated native write failure')
+            }
+            const bytes = atob(String(options.data)).length
+            upload.chunks += 1
+            upload.bytes += bytes
+            backup.chunks += 1
+            backup.bytes += bytes
+            return { written: backup.bytes }
+          }
+          case 'finishBackup':
+            backup.finished = true
+            return { path: '/fake/deep-chat-backup.zip' }
+          case 'abortBackup':
+            backup.aborted = true
+            return { aborted: true }
+          default:
+            return {}
+        }
+      },
+    }
+    return { calls, backup }
   }
+
+  const stub = installNativeStub()
   // 桥在模块加载时按 isNativeShell() 决定装不装；此刻补 Capacitor 已经晚了，
   // 必须再装一次，否则 importHistory 会回退到上游覆盖逻辑，测不到合并路径。
   installImportBridge()
@@ -360,9 +448,154 @@ const run = async () => {
     nativeOutcome === '__TIMEOUT__' ? '超时，疑似 enqueueBackup 自死锁' : 'ok'
   )
   check(
-    nativeCalls.includes('DeepChatFiles.saveBackup'),
-    '场景11 导入前确实调用了原生备份',
-    nativeCalls
+    stub.calls.includes('beginBackup') &&
+      stub.calls.includes('appendBackupChunk') &&
+      stub.calls.includes('finishBackup'),
+    '场景11 导入前备份走分块协议（begin/append/finish）',
+    stub.calls.filter((call) => call.toLowerCase().includes('backup'))
+  )
+  check(
+    stub.backup.finished && !stub.backup.aborted && stub.backup.chunks > 0,
+    '场景11 备份分块全部上传并正常收尾',
+    { chunks: stub.backup.chunks, bytes: stub.backup.bytes }
+  )
+  check(
+    stub.backup.chunks === Math.ceil(stub.backup.bytes / (256 * 1024)),
+    '场景11 分块大小不超过 256 KB（桥负载上限）',
+    { chunks: stub.backup.chunks, bytes: stub.backup.bytes }
+  )
+  delete (globalThis as any).Capacitor
+
+  // ══ 场景 12：外部打开 ZIP 的分块读取路径（open/readChunk/close）══
+  //
+  // 【为什么必须有】前面所有场景拿到的都是已经拼好的 File。真机上 File 是
+  // 「原生逐块 base64 → JS 拼 Blob」出来的：这条路径不测，等于没测用户真正的入口。
+  // 这里用内存里的 ZIP 做原生桩，走真实的 consumePendingFile()。
+  const chunkZip = await makeArchive([
+    sessionFile({
+      id: 'sess-chunked',
+      title: '分块读取会话',
+      updatedAt: T4,
+      messages: [
+        // 300 KB 正文：STORE（不压缩）ZIP 因此超过 256 KB，会分成多块读，
+        // 才能真正验证「逐块拼 Blob」而不是碰巧一块读完。
+        msg(1, null, 'USER', 'a'.repeat(300 * 1024), T4),
+      ],
+    }),
+  ])
+  const chunkZipBytes = new Uint8Array(await chunkZip.arrayBuffer())
+  const chunkStub = installNativeStub(chunkZipBytes)
+  installImportBridge()
+  // consumePendingFile 内部会弹进度与结果页；headless 下 DOM 可用
+  await consumePendingFile()
+  const readCalls = chunkStub.calls.filter((call) => call === 'readPendingFileChunk').length
+  check(
+    chunkStub.calls.includes('hasPendingFile') &&
+      chunkStub.calls.includes('openPendingFile') &&
+      readCalls >= 2 &&
+      chunkStub.calls.includes('closePendingFile'),
+    '场景12 分块读文件路径走通（多块 readChunk + close）',
+    { readCalls, calls: chunkStub.calls.slice(0, 6) }
+  )
+  // 多块拼接后必须仍然是完整可解析的 ZIP，内容一字不差
+  const chunkedSession = await db.loadSession('sess-chunked')
+  check(
+    chunkedSession !== undefined &&
+      chunkedSession.messages[0]?.content.length === 300 * 1024,
+    '场景12 分块读进来的归档完整导入（正文长度一致）',
+    chunkedSession?.messages[0]?.content.length
+  )
+  check(
+    chunkStub.backup.chunks === 1 && chunkStub.backup.finished,
+    '场景12 同一路径下的备份也走分块协议',
+    { chunks: chunkStub.backup.chunks, finished: chunkStub.backup.finished }
+  )
+  delete (globalThis as any).Capacitor
+
+  // ══ 场景 13：暂存辅助函数（批量写 / 游标收集 / 定向回填）══
+  //
+  // 真实归档 593 条会话让这几条路径上了真机：
+  //   • putStagingSessions —— 批量事务代替逐条事务；
+  //   • collectStagingFileTypes —— 游标遍历代替 getAll（内存峰值）；
+  //   • updateStagingImageTypes —— 只改带图片的会话，不再全量扫描。
+  const fakeSession = (id: string, files: { id: string; mimeType: string }[]) => ({
+    id,
+    title: id,
+    createdAt: T1,
+    updatedAt: T2,
+    rootMessageId: '1',
+    messages: [
+      {
+        id: '1',
+        role: 'user',
+        createdAt: T1,
+        content: id,
+        parentId: null,
+        files: files.map((file) => ({
+          id: file.id,
+          serverId: null,
+          name: `${file.id}.png`,
+          size: 1,
+          isImage: true,
+          mimeType: file.mimeType,
+        })),
+      },
+    ],
+  })
+  const helperSessions = [
+    fakeSession('helper-a', [{ id: 'helper-file-a', mimeType: 'image/png' }]),
+    fakeSession('helper-b', [{ id: 'helper-file-b', mimeType: '' }]),
+  ] as unknown as Session[]
+  await db.clearStaging()
+  await db.putStagingSessions(helperSessions)
+  const collected = await db.collectStagingFileTypes()
+  check(
+    collected.get('helper-file-a') === 'image/png' && !collected.has('helper-file-b'),
+    '场景13 游标收集附件类型（批量写入的记录可读）',
+    [...collected.entries()]
+  )
+  await db.updateStagingImageTypes(new Map([['helper-file-b', 'image/jpeg']]), ['helper-b'])
+  const updatedTypes = await db.collectStagingFileTypes()
+  check(
+    updatedTypes.get('helper-file-b') === 'image/jpeg' &&
+      updatedTypes.get('helper-file-a') === 'image/png',
+    '场景13 定向回填只改指定会话且不影响其他会话',
+    [...updatedTypes.entries()]
+  )
+  await db.clearStaging()
+
+  // ══ 场景 14：备份分块上传中途失败 → abort 清理，导入中止 ══
+  //
+  // 真机上「备份写失败」必须保证两件事：临时文件被 abort 删掉、正式数据没被动过。
+  // 这里让原生桩在第一次 append 时抛错，验证 JS 侧的 catch 清理路径。
+  const abortStub = installNativeStub(undefined, { failAppendAt: 1 })
+  installImportBridge()
+  const beforeAbort = (await db.loadSessionSummaries()).length
+  const abortZip = await makeArchive([
+    sessionFile({
+      id: 'sess-aborted',
+      title: '备份失败不应导入',
+      updatedAt: T4,
+      messages: [msg(1, null, 'USER', '这条不该进库', T4)],
+    }),
+  ])
+  let abortThrew = false
+  try {
+    await mergeImport(abortZip)
+  } catch {
+    abortThrew = true
+  }
+  check(abortThrew, '场景14 备份分块失败时导入中止（抛错）')
+  check(
+    abortStub.backup.aborted && !abortStub.backup.finished,
+    '场景14 备份失败时调用 abort 清理临时上传',
+    { aborted: abortStub.backup.aborted, finished: abortStub.backup.finished }
+  )
+  const afterAbort = (await db.loadSessionSummaries()).length
+  check(
+    beforeAbort === afterAbort && (await db.loadSession('sess-aborted')) === undefined,
+    '场景14 备份失败不产生半截数据（正式会话数不变）',
+    { beforeAbort, afterAbort }
   )
   delete (globalThis as any).Capacitor
 

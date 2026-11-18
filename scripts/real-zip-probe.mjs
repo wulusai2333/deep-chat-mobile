@@ -91,11 +91,42 @@ let browser
 try {
   browser = await openBrowser({ workDir: join(workDir, 'profile') })
   await browser.navigate(`${server.url}/index.html`)
-  await browser.waitFor(
-    `window.__PROBE_DONE__ === true`,
-    { timeoutMs: 600000, label: '等待真实 ZIP 导入完成', intervalMs: 500 }
-  )
-  const result = await browser.evaluate(`JSON.stringify(window.__PROBE_RESULT__)`)
+  // 等页面出结果。这里不用 browser.waitFor 一次等到底：
+  // 大归档导入是分钟级操作，卡住时必须能看出卡在哪个阶段，
+  // 所以每 2 秒把心跳与最新日志打出来（页面主线程长时间忙时 evaluate 会超时，跳过即可）。
+  const deadline = Date.now() + 600000
+  let lastBeat
+  let lastLogs
+  let result = null
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 2000))
+    try {
+      const state = await browser.evaluate(
+        `JSON.stringify({done: window.__PROBE_DONE__ === true, beat: window.__PROBE_HEARTBEAT__ || null, logs: (window.__LOGS__||[]).slice(-4), result: window.__PROBE_DONE__ ? window.__PROBE_RESULT__ : null})`
+      )
+      const parsed = JSON.parse(state)
+      if (parsed.beat !== lastBeat) {
+        lastBeat = parsed.beat
+        info(`…${parsed.beat ?? '（未开始）'}`)
+      }
+      const tail = parsed.logs.join('\n')
+      if (tail !== lastLogs) {
+        lastLogs = tail
+        for (const line of parsed.logs) {
+          console.log('  ' + line)
+        }
+      }
+      if (parsed.done) {
+        result = parsed.result
+        break
+      }
+    } catch {
+      // 页面主线程忙（同步解压/写库），下个周期再试
+    }
+  }
+  if (!result) {
+    throw new Error(`等待超时（600s），最后心跳：${lastBeat ?? '未知'}`)
+  }
   const logs = await browser.evaluate(`JSON.stringify(window.__LOGS__)`)
   const bytes = await browser.evaluate(`window.__PROBE_ZIP_BYTES__ || 0`)
 
@@ -105,8 +136,7 @@ try {
     console.log('  ' + line)
   }
   console.log('\n=== 结果 ===')
-  const parsed = JSON.parse(result)
-  console.log(JSON.stringify(parsed, null, 2))
+  console.log(JSON.stringify(result, null, 2))
 } finally {
   await browser?.close()
   await server.close()

@@ -1,0 +1,146 @@
+/**
+ * 移动端附件面板样式 —— web-patches/mobile/chatinput/MobileAttachPanel.module.css
+ *
+ * 尺寸来自 docs/mobile-ui-spec.md §2.5：
+ *   缩略图 78×78 / 圆角 12 / gap 10 / 选择圈 22
+ *   三个操作块等宽、高 76、圆角 16、底色 --m-fill、图标 26 + 文字 15
+ */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  box-sizing: border-box;
+  padding: 12px 20px 16px;
+  animation: panelIn 200ms var(--m-ease);
+}
+
+@keyframes panelIn {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* 最近图片：横向滚动，左右延伸到屏幕边缘，首图仍与操作块左对齐 */
+.recentRow {
+  display: flex;
+  gap: 8px;
+  margin: 0 -20px;
+  padding: 0 20px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.recentRow::-webkit-scrollbar {
+  display: none;
+}
+
+.recentItem {
+  position: relative;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  width: 78px;
+  height: 78px;
+  padding: 0;
+  border: none;
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--m-fill);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.recentItem:active {
+  transform: scale(0.97);
+}
+
+.recentItem:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.recentImage {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* 选择圈：默认未选（半透明深色底 + 白描边）；按压时变成品牌蓝 + 白勾 */
+.selectCircle {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, 0.92);
+  background: rgba(0, 0, 0, 0.32);
+  color: #fff;
+  transition: background 150ms var(--m-ease);
+}
+
+.selectCheck {
+  display: flex;
+  opacity: 0;
+  transition: opacity 150ms var(--m-ease);
+}
+
+.recentItem:active .selectCircle {
+  border-color: var(--m-brand);
+  background: var(--m-brand);
+}
+
+.recentItem:active .selectCheck {
+  opacity: 1;
+}
+
+/* 拍照 / 相册 / 文件：等宽三列（393 视口下每块约 113px） */
+.actions {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.action {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  box-sizing: border-box;
+  height: 82px;
+  padding: 0;
+  border: none;
+  border-radius: 16px;
+  background: var(--m-fill);
+  color: var(--m-text);
+  font: inherit;
+  font-size: 15px;
+  line-height: 20px;
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 150ms var(--m-ease);
+}
+
+.action:active {
+  background: var(--m-fill-press);
+}
+
+.action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

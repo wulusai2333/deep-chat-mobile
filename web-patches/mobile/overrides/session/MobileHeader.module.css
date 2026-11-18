@@ -1,0 +1,7 @@
+/*
+ * 移动端顶栏样式 —— 已迁到 web-patches/mobile/topbar/MobileTopBar.module.css
+ * （构建时注入 web/src/mobile/topbar/）。
+ *
+ * MobileHeader 现在直接渲染 MobileTopBar，不再引用本文件；保留这个 fork 文件是为了
+ * 让 manifest 里对上游 MobileHeader.module.css 的基线登记保持完整（见 docs/mobile-ui-spec.md §1.2）。
+ */

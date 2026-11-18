@@ -9,7 +9,7 @@ android {
         targetSdkVersion rootProject.ext.targetSdkVersion
         // 版本号由 scripts/build-apk.mjs 从 package.json 注入，避免两处手改不同步
         versionCode project.findProperty('deepchatVersionCode')?.toInteger() ?: 1
-        versionName project.findProperty('deepchatVersionName') ?: "0.1.2"
+        versionName project.findProperty('deepchatVersionName') ?: "0.2.1"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -22,9 +22,11 @@ android {
 
     /**
      * 签名配置从 keystore.properties 读，而不是硬编码在 gradle 里。
-     * keystore.properties 已在 .gitignore 中排除 —— 私钥与口令绝不进版本库。
-     * 文件不存在时 release 构建**不带签名**（仍可产出未签名 APK 用于验证编译），
-     * 由 scripts/build-apk.mjs 在需要时提示先生成 keystore。
+     * 发布 keystore 与 keystore.properties **只存在本机**（已在 .gitignore），
+     * 仓库只保存证书指纹 android/release-cert.sha256，由 scripts/build-apk.mjs
+     * 与 scripts/verify.mjs 比对 —— 私钥绝不进版本库。文件不存在时 release
+     * 不带签名，但 build-apk.mjs 会在 release 路径上直接失败，不会悄悄产出
+     * 装不上的包。
      */
     def keystorePropertiesFile = rootProject.file("keystore.properties")
     def keystoreProperties = new Properties()
@@ -53,6 +55,17 @@ android {
             // 调试包也禁止明文，避免「debug 能跑 release 不行」这类环境差异
             applicationIdSuffix ""
             versionNameSuffix "-debug"
+            /**
+             * 关键：debug 也用 release keystore 签名。
+             *
+             * 之前 debug 用 Android 默认调试密钥、release 用发布密钥，两者证书不同，
+             * 于是「先装过 debug 包，再装 release 包」会失败，必须先卸载 —— 而卸载
+             * 会清掉本地会话。个人自用场景下 debug 与 release 应该可以互相覆盖，
+             * 所以统一成同一把发布密钥。
+             */
+            if (keystorePropertiesFile.exists()) {
+                signingConfig signingConfigs.release
+            }
         }
         release {
             minifyEnabled false
