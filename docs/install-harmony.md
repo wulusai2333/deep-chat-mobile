@@ -133,7 +133,7 @@ $env:ANDROID_HOME = 'D:\soft\android-sdk'
 $adb = "$env:ANDROID_HOME\platform-tools\adb.exe"
 
 & $adb devices          # 手机上会弹「允许 USB 调试吗」，勾选「始终允许」
-& $adb install -r "dist-apk\deep-chat-0.1.1-x64-release.apk"
+& $adb install -r "dist-apk\deep-chat-0.1.2-x64-release.apk"
 ```
 
 装完可以直接看日志，排查问题非常有用：
@@ -279,7 +279,7 @@ $adb = "$env:ANDROID_HOME\platform-tools\adb.exe"
 收集这三样：
 
 1. **系统版本**：设置 → 关于手机 → HarmonyOS 版本
-2. **应用版本**：应用内 设置 → 关于（或看 APK 文件名 `deep-chat-0.1.1-...`）
+2. **应用版本**：应用内 设置 → 关于（或看 APK 文件名 `deep-chat-0.1.2-...`）
 3. **日志**（如果能连电脑）：
 
    ```powershell

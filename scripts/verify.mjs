@@ -171,6 +171,30 @@ const checkApk = async () => {
     (badging.match(/application-label:'([^']*)'/) ?? [])[1]
   )
 
+  // APK 里的版本必须等于 package.json 的版本。
+  // 起因：0.1.1 连续出过好几个包，版本号/文件名/体积都一样，用户以为没更新
+  // （实际是装了旧包），而所有测试都看源码、谁也发现不了。这条把
+  // 「dist-apk 里的包到底是不是这次源码构建出来的」变成可断言的。
+  const expectedVersion = pkgVersion()
+  const builtVersion = (badging.match(/versionName='([^']*)'/) ?? [])[1]
+  record(
+    builtVersion === expectedVersion,
+    'APK 版本名与 package.json 一致（包是这次构建出来的）',
+    { apk: builtVersion, pkg: expectedVersion }
+  )
+
+  // versionCode 必须随之变大，否则 Android 不允许覆盖安装。
+  const builtCode = Number.parseInt((badging.match(/versionCode='(\d+)'/) ?? [])[1] ?? '0', 10)
+  const [vMajor = 0, vMinor = 0, vPatch = 0] = expectedVersion
+    .split('.')
+    .map((part) => Number.parseInt(part, 10) || 0)
+  const expectedCode = vMajor * 10000 + vMinor * 100 + vPatch
+  record(
+    builtCode === expectedCode,
+    'versionCode 与版本名匹配（升版本才能覆盖安装）',
+    { apk: builtCode, expected: expectedCode }
+  )
+
   // 启动图标：必须真的打进包（自适应图标用 mipmap-anydpi-v26 的 XML 描述）
   let resources = ''
   try {

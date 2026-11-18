@@ -8,7 +8,8 @@
  * 这三件事包在这里，`pnpm android:release` 就是完整的「从源码到可安装文件」。
  */
 
-import { copyFileSync, existsSync, readdirSync, statSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { copyFileSync, existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { capture, ensureDir, fail, info, paths, pkgVersion, run, step, warn } from './lib/env.mjs'
 
@@ -116,6 +117,26 @@ const main = async () => {
 
   step('完成')
   info(`产物目录：${paths.outApk}`)
+
+  // 每次构建都把这些「装到手机上才看得见」的标识打出来。
+  // 起因：0.1.1 连续出过好几个包，版本号、文件名、体积都一样，
+  // 分不清手机上装的是哪一次 —— 用户以为没更新，其实装了旧包。
+  const built = join(
+    paths.outApk,
+    `deep-chat-${pkgVersion()}-${process.arch === 'x64' ? 'x64' : process.arch}-${buildType.toLowerCase()}.apk`
+  )
+  if (existsSync(built)) {
+    info('这一版的身份（装好后在「设置 → 关于」和 APK 详情里核对）：')
+    info(`  版本名   ${pkgVersion()}`)
+    info(`  versionCode 见 aapt2 dump badging`)
+    info(`  SHA-256  ${createHash('sha256').update(readFileSync(built)).digest('hex').toUpperCase()}`)
+  }
+
+  if (isRelease) {
+    info('⚠ 若手机上装的是更早的包，且签名证书不同，安装会失败（应用未安装）。')
+    info('  先卸载旧版再装即可；卸载会连同本地会话一起清除，建议先在旧版里导出备份。')
+  }
+
   info('安装到已连接的设备：adb install -r <apk 路径>')
 }
 
