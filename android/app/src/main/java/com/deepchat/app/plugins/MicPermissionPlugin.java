@@ -1,4 +1,4 @@
-package com.example.chatdemo.plugins;
+package com.deepchat.app.plugins;
 
 import android.Manifest;
 import android.content.Context;
@@ -49,7 +49,7 @@ import com.getcapacitor.annotation.PermissionCallback;
  * 存储权限一个都不要：导入走 SAF，备份走 MediaStore。
  */
 @CapacitorPlugin(
-        name = "ChatDemoMic",
+        name = "DeepChatMic",
         permissions = {
             @Permission(alias = "microphone", strings = { Manifest.permission.RECORD_AUDIO })
         })

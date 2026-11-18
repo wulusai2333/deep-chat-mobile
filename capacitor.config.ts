@@ -20,8 +20,8 @@ import type { CapacitorConfig } from '@capacitor/cli'
  *   「WebView 内核偏旧」一节（下调 rspack targets 到 chrome >= 99）。
  */
 const config: CapacitorConfig = {
-  appId: 'com.example.chatdemo',
-  appName: 'Chat Demo',
+  appId: 'com.deepchat.app',
+  appName: 'Deep Chat',
   webDir: 'dist',
   // 打包内置资源，不在运行时连本地开发服务器
   bundledWebRuntime: false,
@@ -36,7 +36,7 @@ const config: CapacitorConfig = {
     minWebViewVersion: 105,
   },
   // 原生壳标识，前端用 navigator.userAgent 判断是否跑在 APK 里
-  appendUserAgent: 'ChatDemoMobile/0.1.1',
+  appendUserAgent: 'DeepChatMobile/0.1.1',
   // 键盘行为交给 WebView 自身 + useMobileViewport（上游已处理 visualViewport）
   ios: {
     contentInset: 'never',

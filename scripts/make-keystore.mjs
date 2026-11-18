@@ -51,7 +51,7 @@ const main = async () => {
     '-validity', VALIDITY_DAYS,
     '-storepass', DEFAULT_STORE_PASSWORD,
     '-keypass', DEFAULT_KEY_PASSWORD,
-    '-dname', 'CN=Chat Demo, OU=Mobile, O=ChatDemo, L=, ST=, C=CN',
+    '-dname', 'CN=Deep Chat, OU=Mobile, O=DeepChat, L=, ST=, C=CN',
   ])
   info(`已生成：${keystorePath}`)
 

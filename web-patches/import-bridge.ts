@@ -176,7 +176,7 @@ const imageType = (bytes: Uint8Array): string => {
  */
 const backupBeforeImport = async (): Promise<string> => {
   const { blob } = await exportHistory()
-  const fileName = `chat-demo-backup-${backupStamp(new Date())}.zip`
+  const fileName = `deep-chat-backup-${backupStamp(new Date())}.zip`
   const { path } = await callNative<{ path: string }>(PLUGIN_FILES, 'saveBackup', {
     fileName,
     data: await toBase64(blob),

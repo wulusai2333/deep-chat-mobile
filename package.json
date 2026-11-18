@@ -25,6 +25,7 @@
   },
   "devDependencies": {
     "@capacitor/cli": "8.6.2",
+    "jpeg-js": "^0.4.4",
     "typescript": "5.9.3"
   }
 }

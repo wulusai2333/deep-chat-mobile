@@ -1,11 +1,11 @@
-package com.example.chatdemo;
+package com.deepchat.app;
 
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
-import com.example.chatdemo.plugins.FileOpenPlugin;
-import com.example.chatdemo.plugins.MicPermissionPlugin;
-import com.example.chatdemo.plugins.SecureStoragePlugin;
+import com.deepchat.app.plugins.FileOpenPlugin;
+import com.deepchat.app.plugins.MicPermissionPlugin;
+import com.deepchat.app.plugins.SecureStoragePlugin;
 import com.getcapacitor.BridgeActivity;
 
 /**

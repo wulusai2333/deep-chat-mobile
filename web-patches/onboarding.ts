@@ -44,9 +44,9 @@ const ONBOARDED_KEY = 'chat-demo:onboarded'
 
 /** 三步说明文案。放在一起便于以后本地化 */
 const INTRO_POINTS: readonly [string, string][] = [
-  ['数据只保存在本机', '对话记录存在手机的本地数据库里，不会上传到任何第三方服务器。'],
-  ['API Key 加密保存', 'Key 由系统 Keystore 加密后存储，即使手机丢失也不会泄露。'],
-  ['卸载会清空数据', '请在卸载或换机前，先用「设置 → 数据管理 → 导出」把历史会话备份成 ZIP。'],
+  ['对话只保存在本机', '所有会话记录都写在这台手机的本地数据库里，不会上传到任何第三方服务器。'],
+  ['API Key 加密保存', 'Key 由系统 Keystore 加密后存储，应用与系统备份都无法读取明文。'],
+  ['卸载前请先备份', '卸载应用会连同本地会话一起清除。请在卸载或换机前，用「设置 → 数据管理 → 导出」把历史会话备份成 ZIP 文件。'],
 ]
 
 /**
@@ -71,7 +71,7 @@ const renderOnboarding = (): Promise<boolean> =>
     }
 
     const renderIntro = (): void => {
-      card.replaceChildren(title('开始使用'))
+      card.replaceChildren(title('欢迎使用 Deep Chat'))
       for (const [heading, body] of INTRO_POINTS) {
         const block = document.createElement('div')
         block.style.cssText = 'margin-bottom:14px'
@@ -95,7 +95,7 @@ const renderOnboarding = (): Promise<boolean> =>
     const renderKey = (): void => {
       card.replaceChildren(title('填写 API Key'))
       card.append(
-        paragraph('在 DeepSeek 开放平台创建的 API Key，只保存在这台设备上。', c.muted)
+        paragraph('Deep Chat 需要 DeepSeek 的 API Key 才能对话。请在 DeepSeek 开放平台创建后填入，它只会保存在这台设备上。', c.muted)
       )
 
       const input = document.createElement('input')
@@ -124,7 +124,7 @@ const renderOnboarding = (): Promise<boolean> =>
 
       const actions = row()
       const back = button('上一步', 'outline', renderIntro)
-      const save = button('保存', 'primary', () => void submit(), 2)
+      const save = button('完成', 'primary', () => void submit(), 2)
       actions.append(back, save)
       card.append(input, status, actions)
 

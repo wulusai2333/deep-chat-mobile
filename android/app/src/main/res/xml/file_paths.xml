@@ -10,5 +10,5 @@
   且 cache 被系统清理不影响用户数据。
 -->
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
-    <cache-path name="chatdemo_cache" path="." />
+    <cache-path name="deepchat_cache" path="." />
 </paths>

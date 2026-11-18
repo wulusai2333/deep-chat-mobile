@@ -60,6 +60,18 @@ const checkBuild = () => {
     '安全区依赖它；缺了在浏览器档位 A 下刘海会被遮挡'
   )
 
+  // 产品名必须是 Deep Chat：这是正式客户端，不是上游的 API 演示程序。
+  // 上游文案带 demo 字样，补丁一失效就会原样漏到用户界面上。
+  record(
+    html.includes('<title>Deep Chat</title>'),
+    'index.html 标题是 Deep Chat',
+    'prepare-web.mjs 的 page title 补丁可能失效了'
+  )
+  record(
+    !/API\s*使用\s*demo|API usage demo/i.test(html),
+    'index.html 不残留 demo 字样'
+  )
+
   const mainJs = findMainJs(paths.dist)
   record(mainJs !== null, 'main bundle 存在')
   if (!mainJs) {
@@ -73,6 +85,14 @@ const checkBuild = () => {
   record(js.includes('shell-mic-blocked'), '麦克风引导已打包')
   record(js.includes('hasPendingFile'), '外部打开 ZIP 处理已打包')
   record(js.includes('__CHAT_DEMO_ONBOARDING__'), '首启引导已打包')
+
+  // 侧边栏显示的应用名来自 i18n 的 appName，被打进 main bundle。
+  // 查不到字符串说明 rebrand 补丁失效（会退回「API 使用 demo」）。
+  record(js.includes('Deep Chat'), 'bundle 内含产品名 Deep Chat')
+  record(
+    !/API\s*使用\s*demo|API usage demo/.test(js),
+    'bundle 内不残留 demo 文案'
+  )
 
   const mainCss = findMainCss(paths.dist)
   record(mainCss !== null, 'main css 存在')
@@ -130,6 +150,35 @@ const checkApk = async () => {
     return
   }
 
+  // 应用身份：包名与显示名。改名后最容易漏的是这里 ——
+  // applicationId 改了但 label 还是旧的，装到手机上图标下面写着别的名字。
+  record(
+    /package: name='com\.deepchat\.app'/.test(badging),
+    '包名是 com.deepchat.app',
+    (badging.match(/package: name='([^']+)'/) ?? [])[1]
+  )
+  record(
+    /application-label:'Deep Chat'/.test(badging),
+    "应用显示名是 'Deep Chat'",
+    (badging.match(/application-label:'([^']*)'/) ?? [])[1]
+  )
+
+  // 启动图标：必须真的打进包（自适应图标用 mipmap-anydpi-v26 的 XML 描述）
+  let resources = ''
+  try {
+    const { stdout } = await capture(aapt2, ['dump', 'resources', apkPath])
+    resources = stdout
+  } catch {
+    // 下面按缺失处理
+  }
+  for (const name of ['mipmap/ic_launcher', 'mipmap/ic_launcher_foreground', 'mipmap/ic_launcher_round']) {
+    record(resources.includes(name), `图标资源 ${name} 已打包`)
+  }
+  record(
+    resources.includes('color/ic_launcher_background'),
+    '自适应图标背景色已打包'
+  )
+
   // 权限白名单：多一个都要报出来让人确认
   const permissions = [...badging.matchAll(/uses-permission: name='([^']+)'/g)].map((m) => m[1])
   const allowed = new Set([
@@ -138,7 +187,7 @@ const checkApk = async () => {
     'android.permission.MODIFY_AUDIO_SETTINGS',
   ])
   const unexpected = permissions.filter(
-    (name) => !allowed.has(name) && !name.startsWith('com.example.chatdemo.')
+    (name) => !allowed.has(name) && !name.startsWith('com.deepchat.app.')
   )
   record(
     unexpected.length === 0,
@@ -248,9 +297,9 @@ const checkSecurity = () => {
   const pkg = JSON.parse(readFileSync(join(paths.root, 'package.json'), 'utf8'))
   const capConfig = readFileSync(join(paths.root, 'capacitor.config.ts'), 'utf8')
   record(
-    capConfig.includes(`ChatDemoMobile/${pkg.version}`),
+    capConfig.includes(`DeepChatMobile/${pkg.version}`),
     'capconfig 的 UA 标记与 package.json 版本一致',
-    `期望 ChatDemoMobile/${pkg.version}`
+    `期望 DeepChatMobile/${pkg.version}`
   )
 }
 
@@ -270,6 +319,9 @@ const checkPatches = () => {
 
   // 每个补丁点的标记都还在 —— 有人手工改回去会立刻暴露
   const markers = [
+    ['src/i18n/zh.ts', 'mobile-shell: product name zh'],
+    ['src/i18n/en.ts', 'mobile-shell: product name en'],
+    ['src/index.html', 'mobile-shell: page title'],
     ['src/index.html', 'mobile-shell: viewport-fit'],
     ['src/main.tsx', 'mobile-shell: bootstrap'],
     ['src/main.tsx', 'mobile-shell: await shell'],

@@ -161,6 +161,36 @@ const replaceOnce = (file, marker, from, to) => {
  * - 用 `rg 'mobile-shell:'` 定位全部改动点。
  */
 const applyPatches = () => {
+  // ── 补丁 0a：把「demo」字样换成正式产品名 ─────────────────────────────────
+  // 上游是 DeepSeek 官方放出的 API 演示程序，界面里写着「API 使用 demo」。
+  // 本壳是一个正常使用的客户端，不是演示，所以侧边栏与页面标题都改成 Deep Chat。
+  // 只改「名称」这一处文案：其它界面文字一律不动（规格要求 UI 与桌面版一致）。
+  replaceOnce(
+    'src/i18n/zh.ts',
+    'mobile-shell: product name zh',
+    "appName: 'API 使用 demo',",
+    "// mobile-shell: product name zh —— 本壳是正式客户端，不是演示程序\n  appName: 'Deep Chat',"
+  )
+  replaceOnce(
+    'src/i18n/en.ts',
+    'mobile-shell: product name en',
+    "appName: 'API usage demo',",
+    "// mobile-shell: product name en —— 见 zh.ts 同名补丁\n  appName: 'Deep Chat',"
+  )
+
+  // ── 补丁 0b：页面标题（任务切换器 / 浏览器标签里显示的名字）─────────────
+  // 注意替换文本里必须带 MARK 标记：replaceOnce 靠它判断「是否已打过」。
+  // 标记写漏了，第二次运行就会因为找不到原文而报错退出。
+  replaceOnce(
+    'src/index.html',
+    'mobile-shell: page title',
+    '<title>API 使用 demo</title>',
+    [
+      '<!-- mobile-shell: page title —— 正式产品名，不是演示程序 -->',
+      '    <title>Deep Chat</title>',
+    ].join('\n    ')
+  )
+
   // ── 补丁 1：viewport meta 加 viewport-fit=cover ───────────────────────────
   // 没有 viewport-fit=cover 时 env(safe-area-inset-*) 恒为 0，安全区补丁失效。
   replaceOnce(

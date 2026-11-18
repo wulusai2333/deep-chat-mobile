@@ -82,7 +82,7 @@ APK 走的是鸿蒙内置的 Android 兼容层，不需要任何「刷机」「�
 | --- | --- | --- |
 | 「解析包时出现问题」 | APK 文件损坏，或系统版本低于 Android 7.0（API 24） | 重新传一次；确认系统是 4.x |
 | 「应用未安装」 | 已装过签名不同的版本 | 先卸载旧版（**会清数据**），再装 |
-| 「与已有应用冲突」 | 包名 `com.example.chatdemo` 已被占用 | 同上 |
+| 「与已有应用冲突」 | 包名 `com.deepchat.app` 已被占用 | 同上 |
 
 ---
 
@@ -145,7 +145,7 @@ $adb = "$env:ANDROID_HOME\platform-tools\adb.exe"
 ### 5.3 卸载
 
 ```powershell
-& $adb uninstall com.example.chatdemo
+& $adb uninstall com.deepchat.app
 ```
 
 **注意会清掉全部会话数据。** 卸载前先在应用内「设置 → 数据 → 导出」备份。
@@ -168,12 +168,12 @@ $adb = "$env:ANDROID_HOME\platform-tools\adb.exe"
 
 - 首次拒绝后，下次点录音**系统会再弹一次**
 - 若连续拒绝两次（或选择「不再询问」），系统不再弹框。此时应用会显示引导浮层：
-  点「去设置」直达 `设置 → 应用 → Chat Demo → 权限`
+  点「去设置」直达 `设置 → 应用 → Deep Chat → 权限`
 
 手动路径：
 
 ```
-设置 → 应用和服务 → 应用管理 → 找到 Chat Demo → 权限 → 麦克风 → 允许
+设置 → 应用和服务 → 应用管理 → 找到 Deep Chat → 权限 → 麦克风 → 允许
 ```
 
 ### 6.2 为什么系统设置里麦克风显示「已允许」，语音输入还是失败
@@ -209,15 +209,15 @@ $adb = "$env:ANDROID_HOME\platform-tools\adb.exe"
 
 **方式 B：从文件管理器直接打开**
 
-在文件管理里点 ZIP → 「用其他应用打开」→ 选 Chat Demo。
+在文件管理里点 ZIP → 「用其他应用打开」→ 选 Deep Chat。
 应用会被拉起并直接开始导入。
 
-> 方式 B 依赖 manifest 里的 intent-filter。若列表里没有 Chat Demo，
+> 方式 B 依赖 manifest 里的 intent-filter。若列表里没有 Deep Chat，
 > 说明系统文件管理器没把它识别为 ZIP 处理者，用方式 A。
 
 ### 7.4 导入会发生什么
 
-1. **先自动备份**当前全部会话到 `Documents/ChatDemo/chat-demo-backup-<时间>.zip`
+1. **先自动备份**当前全部会话到 `Documents/DeepChat/deep-chat-backup-<时间>.zip`
    —— 备份失败会中止导入，不会在没有退路的情况下动数据
 2. **合并**（不是覆盖）：同 id 的会话取 `updatedAt` 更新的那份；id 不同的追加
 3. 结果页显示：**新增 / 更新 / 跳过 / 失败** 四个数字 + 备份路径
@@ -225,12 +225,12 @@ $adb = "$env:ANDROID_HOME\platform-tools\adb.exe"
 ### 7.5 备份文件在哪
 
 ```
-文件管理 → 文档 → ChatDemo → chat-demo-backup-20261118-193000.zip
+文件管理 → 文档 → DeepChat → deep-chat-backup-20261118-193000.zip
 ```
 
-- **Android 10（API 29）及以上**：通过 MediaStore 写入，路径显示为 `Documents/ChatDemo/`
+- **Android 10（API 29）及以上**：通过 MediaStore 写入，路径显示为 `Documents/DeepChat/`
 - **Android 7.0–9（API 24–28）**：写入应用专属外部目录
-  `Android/data/com.example.chatdemo/files/Documents/ChatDemo/`
+  `Android/data/com.deepchat.app/files/Documents/DeepChat/`
   这个目录在文件管理器里可能看不见，需要用 adb 或第三方文件管理器访问。
   （鸿蒙 4.3 对应 API 31，走的是前者。）
 
@@ -264,9 +264,9 @@ $adb = "$env:ANDROID_HOME\platform-tools\adb.exe"
 | --- | --- | --- |
 | 会话 / 附件 | 应用私有 IndexedDB | 应用内「设置 → 数据 → 清空」，或卸载 |
 | API Key | EncryptedSharedPreferences（密钥在 Android Keystore） | 应用内设置里清除，或卸载 |
-| 导入备份 | `Documents/ChatDemo/` | 在文件管理里手动删 |
+| 导入备份 | `Documents/DeepChat/` | 在文件管理里手动删 |
 
-**卸载会清掉前两项，但不会删 `Documents/ChatDemo/` 里的备份** —— 那是刻意设计，
+**卸载会清掉前两项，但不会删 `Documents/DeepChat/` 里的备份** —— 那是刻意设计，
 防止误卸载后连退路都没了。要彻底清除请手动删那个目录。
 
 `allowBackup="false"`，所以这些数据**不会**被系统云备份带走 —— 换手机不会自动迁移，

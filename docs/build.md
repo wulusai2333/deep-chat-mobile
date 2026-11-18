@@ -274,7 +274,7 @@ pnpm web:prepare    # 若某处锚点失效，会明确报「找不到待替换�
 ```
 用户输入 → 前端 setApiKey()
          → window.__CHAT_DEMO_KEYSTORE__.set()      （浏览器里没有这个对象）
-         → 原生 ChatDemoSecureStorage.write()
+         → 原生 DeepChatSecureStorage.write()
          → EncryptedSharedPreferences（MasterKey 在 Android Keystore 里，AES256-GCM）
 ```
 
@@ -460,9 +460,9 @@ pnpm test:import   # 合并导入端到端（真实 IndexedDB）
 - [ ] 语音输入：选「不再询问」后再录音，出现「去设置」引导
 - [ ] 朗读：点朗读有声音（无声音先查媒体音量与静音开关）
 - [ ] 导入：设置 → 数据 → 导入 ZIP（系统文件选择器），结果页显示新增/更新/跳过/失败
-- [ ] 导入后 `Documents/ChatDemo/` 下有 `chat-demo-backup-<时间>.zip`
+- [ ] 导入后 `Documents/DeepChat/` 下有 `deep-chat-backup-<时间>.zip`
 - [ ] 同一 ZIP 连导 3 次，会话数不变
-- [ ] 在文件管理器里点开 ZIP → 「用其他应用打开」→ Chat Demo，能直接导入
+- [ ] 在文件管理器里点开 ZIP → 「用其他应用打开」→ Deep Chat，能直接导入
 - [ ] 锁屏 5 分钟回来，应用还在（而不是被系统杀掉）
 - [ ] 飞行模式下启动，历史会话能看（只是发不出消息）
 
@@ -478,7 +478,7 @@ pnpm test:import   # 合并导入端到端（真实 IndexedDB）
 | `SDK location not found` | `local.properties` 缺失/路径错 | 改 `android/local.properties` 的 `sdk.dir` |
 | `找不到待替换原文` | 上游代码变了，锚点失效 | 看报错指的文件，人读一遍再更新补丁 |
 | APK 装上白屏 | `dist/` 是旧的，或资产没灌入 | `build:web` → `cap:sync` → 重新打包；`pnpm verify` A 组会抓这个 |
-| `INSTALL_FAILED_UPDATE_INCOMPATIBLE` | 签名与已装版本不同 | 先 `adb uninstall com.example.chatdemo`（**会清数据**） |
+| `INSTALL_FAILED_UPDATE_INCOMPATIBLE` | 签名与已装版本不同 | 先 `adb uninstall com.deepchat.app`（**会清数据**） |
 | 装不上，提示「解析包错误」 | `minSdk` 高于设备，或文件传输损坏 | 确认 Android 版本 ≥ 7.0（API 24）；重新传一次 |
 | 录音失败但系统里麦克风已允许 | `MODIFY_AUDIO_SETTINGS` 缺失 | 见 [§11](#11-一个容易忽略的坑录音权限) |
 | 输入中文时拼音被打断 | `captureInput` 被设成 `true` | 保持 `captureInput: false` |

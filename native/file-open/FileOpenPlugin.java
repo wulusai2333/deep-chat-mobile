@@ -1,4 +1,4 @@
-package com.example.chatdemo.plugins;
+package com.deepchat.app.plugins;
 
 import android.content.ContentResolver;
 import android.content.ContentValues;
@@ -51,7 +51,7 @@ import java.io.OutputStream;
  * 由网页在合适时机调 {@link #getPendingFile} 取走。不用事件推送，因为
  * 事件需要前端维护监听器生命周期，而轮询一个「有没有待处理文件」更简单也更稳。
  */
-@CapacitorPlugin(name = "ChatDemoFiles")
+@CapacitorPlugin(name = "DeepChatFiles")
 public class FileOpenPlugin extends Plugin {
 
     /** 单文件上限：超过就不读了，避免 OOM。48 MB 足够容纳正常的历史导出。 */
@@ -134,7 +134,7 @@ public class FileOpenPlugin extends Plugin {
 
     /**
      * 写 ZIP。
-     * API 29+ 用 MediaStore 落到公共 Documents/ChatDemo（用户能在「文件」里直接看到）；
+     * API 29+ 用 MediaStore 落到公共 Documents/DeepChat（用户能在「文件」里直接看到）；
      * API 24–28 没有免权限的公共目录，退到应用专属目录，并如实返回该路径。
      */
     private String writeArchive(String fileName, byte[] bytes) throws Exception {
@@ -145,7 +145,7 @@ public class FileOpenPlugin extends Plugin {
             values.put(MediaStore.MediaColumns.MIME_TYPE, "application/zip");
             values.put(
                     MediaStore.MediaColumns.RELATIVE_PATH,
-                    Environment.DIRECTORY_DOCUMENTS + File.separator + "ChatDemo");
+                    Environment.DIRECTORY_DOCUMENTS + File.separator + "DeepChat");
             // IS_PENDING 保证其他应用在写完之前看不到半截文件
             values.put(MediaStore.MediaColumns.IS_PENDING, 1);
             Uri collection = MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY);
@@ -163,12 +163,12 @@ public class FileOpenPlugin extends Plugin {
             values.clear();
             values.put(MediaStore.MediaColumns.IS_PENDING, 0);
             resolver.update(item, values, null, null);
-            return "Documents/ChatDemo/" + fileName;
+            return "Documents/DeepChat/" + fileName;
         }
 
         // API 24–28：应用专属目录，免权限；卸载应用会一并删除
         File dir = new File(
-                getContext().getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS), "ChatDemo");
+                getContext().getExternalFilesDir(Environment.DIRECTORY_DOCUMENTS), "DeepChat");
         if (!dir.exists() && !dir.mkdirs()) {
             throw new IllegalStateException("cannot create backup directory");
         }

@@ -71,7 +71,7 @@ export const fail = (message, hint) => {
 /**
  * 在 shell 模式下，Node 会把 argv 用空格拼成一条命令行，再由 cmd.exe 重新解析。
  * 这意味着任何含空格或 cmd 元字符的参数都会被拆开 —— 典型受害者是
- * keytool 的 `-dname "CN=Chat Demo, O=ChatDemo"`。
+ * keytool 的 `-dname "CN=Deep Chat, O=DeepChat"`。
  *
  * 所以 shell 模式下必须自己加引号；非 shell 模式（直接 spawn 可执行文件）不能加，
  * 否则引号会变成参数内容的一部分。

@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">Chat Demo</string>
-    <string name="title_activity_main">Chat Demo</string>
-    <string name="package_name">com.example.chatdemo</string>
-    <string name="custom_url_scheme">com.example.chatdemo</string>
+    <string name="app_name">Deep Chat</string>
+    <string name="title_activity_main">Deep Chat</string>
+    <string name="package_name">com.deepchat.app</string>
+    <string name="custom_url_scheme">com.deepchat.app</string>
 </resources>

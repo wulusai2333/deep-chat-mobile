@@ -116,7 +116,7 @@ const runHeadless = async (baseUrl, workDir) => {
     }
     return { payload, logs, reason: null }
   } finally {
-    browser.close()
+    await browser.close()
   }
 }
 

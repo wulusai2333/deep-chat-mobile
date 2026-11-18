@@ -1,4 +1,4 @@
-package com.example.chatdemo.plugins;
+package com.deepchat.app.plugins;
 
 import android.content.Context;
 import android.content.SharedPreferences;
@@ -40,7 +40,7 @@ import com.getcapacitor.annotation.CapacitorPlugin;
  * EncryptedSharedPreferences 首次创建要访问 Keystore（可能几十毫秒），
  * 放在后台线程正合适，不会卡 UI。
  */
-@CapacitorPlugin(name = "ChatDemoSecureStorage")
+@CapacitorPlugin(name = "DeepChatSecureStorage")
 public class SecureStoragePlugin extends Plugin {
 
     /** prefs 文件名。改名会让已存的 Key 丢失，不要动。 */

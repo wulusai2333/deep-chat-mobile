@@ -20,9 +20,9 @@ type CapacitorBridge = {
 }
 
 /** 三个自写插件的名字，与 native/ 下各自 @CapacitorPlugin(name=...) 保持一致 */
-export const PLUGIN_SECURE_STORAGE = 'ChatDemoSecureStorage'
-export const PLUGIN_MIC = 'ChatDemoMic'
-export const PLUGIN_FILES = 'ChatDemoFiles'
+export const PLUGIN_SECURE_STORAGE = 'DeepChatSecureStorage'
+export const PLUGIN_MIC = 'DeepChatMic'
+export const PLUGIN_FILES = 'DeepChatFiles'
 
 const bridge = (): CapacitorBridge | undefined => {
   const capacitor = (globalThis as { Capacitor?: CapacitorBridge }).Capacitor

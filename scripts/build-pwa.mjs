@@ -64,17 +64,18 @@ const main = () => {
   // ── manifest.webmanifest ────────────────────────────────────────────────
   // display: standalone —— 加到桌面后没有浏览器地址栏，观感接近原生
   // orientation: portrait —— 与 APK 一致（应用本身是竖屏优先的聊天界面）
-  // background_color / theme_color 用 App 的深色底，避免启动白闪
+  // background_color / theme_color 取图标主品牌色 #475EA2（由 make-icons.mjs 从
+  // 源图统计得到）。启动闪屏和系统栏用同一个颜色，启动时不会闪出白底。
   const manifest = {
-    name: 'Chat Demo',
-    short_name: 'Chat Demo',
+    name: 'Deep Chat',
+    short_name: 'Deep Chat',
     description: '把对话留在本机的聊天客户端',
     start_url: './',
     scope: './',
     display: 'standalone',
     orientation: 'portrait',
-    background_color: '#1b1f2b',
-    theme_color: '#1b1f2b',
+    background_color: '#475ea2',
+    theme_color: '#475ea2',
     lang: 'zh-CN',
     dir: 'ltr',
     icons: [
@@ -105,7 +106,7 @@ const main = () => {
   const precache = assets.map((name) => `./${name}`)
 
   const sw = `/*
- * Chat Demo service worker —— 由 scripts/build-pwa.mjs 生成，请勿手工编辑。
+ * Deep Chat service worker —— 由 scripts/build-pwa.mjs 生成，请勿手工编辑。
  *
  * 设计约束（见 docs/build.md 的「PWA 兜底」一节）：
  *   1. 只缓存构建产物，不缓存任何 API 响应 —— 否则界面上的回复和服务器不一致。

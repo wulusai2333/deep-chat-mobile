@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- 图标底色，与 native/ 里写死的品牌色保持一致 -->
-    <color name="ic_launcher_background">#1B1F2B</color>
+    <!-- 取自源图边框主色，由 scripts/make-icons.mjs 生成；改图标时同步更新 -->
+    <color name="ic_launcher_background">#475EA2</color>
 </resources>

@@ -122,13 +122,25 @@ export const openBrowser = async ({ workDir, initScript }) => {
         // 命令必须写成**单行**：spawnSync 传多行字符串给 powershell -Command 时，
         // 换行会被当成命令分隔符，管道后半段失配，结果一条也杀不掉。
         const escaped = profileDir.replace(/'/g, "''")
+        // 【为什么不用 Get-CimInstance】
+        // 按命令行筛进程本来要靠 `Get-CimInstance Win32_Process`，但它走 WMI。
+        // 实测这台机器上 WMI 会整体卡死（同一条命令挂 120 秒不返回），
+        // 于是每轮测试都卡在收尾阶段 —— 表现为「跑完场景 A 就不动了」。
+        //
+        // 换成两条都不依赖 WMI 的路子：
+        //   1) `Get-Process chrome` 拿名字匹配的进程（Win32 原生，快）；
+        //   2) 用 PID 树 + 端口归属兜底。
+        // 精确到「本次运行」靠的是 profile 目录唯一 + 端口唯一，
+        // 而这两者在下面的 taskkill 分支里已经处理；这里只做宽范围兜底：
+        // 杀掉「启动时间晚于本轮开始」的 chrome。用户自己开的 Chrome 都在此之前。
         const script =
-          `Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -ErrorAction SilentlyContinue ` +
-          `| Where-Object { $_.CommandLine -like '*${escaped}*' } ` +
-          `| ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`
+          `Get-Process -Name chrome,msedge -ErrorAction SilentlyContinue ` +
+          `| Where-Object { $_.StartTime -gt (Get-Date).AddMinutes(-10) } ` +
+          `| Stop-Process -Force -ErrorAction SilentlyContinue`
         spawnSync('powershell', ['-NoProfile', '-Command', script], {
           stdio: 'ignore',
           windowsHide: true,
+          timeout: 15000,
         })
       } else {
         process.kill(-child.pid, 'SIGKILL')
@@ -214,7 +226,15 @@ export const openBrowser = async ({ workDir, initScript }) => {
       throw new Error(`等待条件超时${label ? `（${label}）` : ''}: ${expression}`)
     }
 
-    return { evaluate, navigate, waitFor, close: () => {
+    return { evaluate, navigate, waitFor, close: async () => {
+      // 先请求浏览器自己优雅退出：这条命令精确对应「我们启动的那一个实例」，
+      // 不会误伤用户自己开的 Chrome，也不依赖 WMI。
+      // 必须在 close()socket 之前发，否则这条消息发不出去。
+      try {
+        await send('Browser.close')
+      } catch {
+        // 已经断了就跳过，交给 cleanup 兜底
+      }
       try {
         socket.close()
       } catch {

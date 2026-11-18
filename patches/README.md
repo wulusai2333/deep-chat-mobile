@@ -1,7 +1,7 @@
 # patches/ —— 对上游源码的改动镜像
 
 这里是**给人看的文档**，不是构建输入。真正的补丁逻辑在 `scripts/prepare-web.mjs`，
-它把 `web-patches/` 下的新文件复制进 `web/src/shell/`，再对这 9 个上游文件做 14 处锚点替换。
+它把 `web-patches/` 下的新文件复制进 `web/src/shell/`，再对这 10 个上游文件做 17 处锚点替换。
 
 ## 为什么要有这个目录
 
@@ -10,27 +10,30 @@
 踩过坑之后才明白的（例如 `MODIFY_AUDIO_SETTINGS`、`await shellReady` 的冷启动竞态）。
 
 所以每个改动在这里有一份带完整理由的说明。两处内容必须保持一致，
-`scripts/verify.mjs` 的 D 组用 14 个 `mobile-shell:` 标记守住这一点：
+`scripts/verify.mjs` 的 D 组用 17 个 `mobile-shell:` 标记守住这一点：
 任何人把补丁改回去，自检立刻失败。
 
-## 14 处改动总览
+## 17 处改动总览
 
 | # | 上游文件 | 标记 | 说明文件 | 一句话理由 |
 | --- | --- | --- | --- | --- |
-| 1 | `src/index.html` | `viewport-fit` | [index.html.ts](index.html.ts) | 不加 `viewport-fit=cover`，`env(safe-area-inset-*)` 恒为 0，刘海会压住标题 |
-| 2 | `src/main.tsx` | `bootstrap` | [main.tsx.ts](main.tsx.ts) | 引入壳层入口 |
-| 3 | `src/main.tsx` | `await shell` | [main.tsx.ts](main.tsx.ts) | 等 Key 注入后再 render，否则 `ensureApiKey()` 误弹设置窗 |
-| 4 | `src/components/settings/settingsDialogState.ts` | `onboarding owns key prompt` | [settingsDialogState.ts](settingsDialogState.ts) | 首启时引导页接管，别和设置窗抢 |
-| 5 | `src/services/settings.ts` | `secure api key` | [settings.ts](settings.ts) | Key 的类型声明 + 运行时事件监听 |
-| 6 | `src/services/settings.ts` | `api key initial` | [settings.ts](settings.ts) | 内存 Key 优先于 localStorage |
-| 7 | `src/services/settings.ts` | `api key setter` | [settings.ts](settings.ts) | 有加密桥时只写原生，**先 return** 不落明文 |
-| 8 | `src/services/chat/history/toLocal.ts` | `no toSorted` | [es2023-methods.ts](es2023-methods.ts) | ES2023 方法在老内核上是 undefined |
-| 9 | `src/services/chat/store.ts` | `no toReversed` | [es2023-methods.ts](es2023-methods.ts) | 同上 |
-| 10 | `src/services/chat/db.ts` | `merge staging helpers` | [db.merge.ts](db.merge.ts) | 合并导入需要 3 个暂存辅助函数 |
-| 11 | `src/services/chat/backup.ts` | `export snapshot` | [backup.ts](backup.ts) | 拆出不入队的导出，供导入前自动备份复用 |
-| 12 | `src/services/chat/backup.ts` | `merge import` | [backup.ts](backup.ts) | 把「替换」改成「合并」 |
-| 13 | `src/components/chatInput/useVoiceInput.ts` | `mic guidance import` | [useVoiceInput.ts](useVoiceInput.ts) | 引入永久拒绝的引导 |
-| 14 | `src/components/chatInput/useVoiceInput.ts` | `mic guidance` | [useVoiceInput.ts](useVoiceInput.ts) | 仅 `NotAllowedError` 时问原生，其余照旧 |
+| 1 | `src/i18n/zh.ts` | `product name zh` | [app-name.ts](app-name.ts) | 侧边栏应用名：上游写「API 使用 demo」，本壳是正式客户端 |
+| 2 | `src/i18n/en.ts` | `product name en` | [app-name.ts](app-name.ts) | 同上（英文串） |
+| 3 | `src/index.html` | `page title` | [app-name.ts](app-name.ts) | 页面标题 / 任务切换器里显示的名字 |
+| 4 | `src/index.html` | `viewport-fit` | [index.html.ts](index.html.ts) | 不加 `viewport-fit=cover`，`env(safe-area-inset-*)` 恒为 0，刘海会压住标题 |
+| 5 | `src/main.tsx` | `bootstrap` | [main.tsx.ts](main.tsx.ts) | 引入壳层入口 |
+| 6 | `src/main.tsx` | `await shell` | [main.tsx.ts](main.tsx.ts) | 等 Key 注入后再 render，否则 `ensureApiKey()` 误弹设置窗 |
+| 7 | `src/components/settings/settingsDialogState.ts` | `onboarding owns key prompt` | [settingsDialogState.ts](settingsDialogState.ts) | 首启时引导页接管，别和设置窗抢 |
+| 8 | `src/services/settings.ts` | `secure api key` | [settings.ts](settings.ts) | Key 的类型声明 + 运行时事件监听 |
+| 9 | `src/services/settings.ts` | `api key initial` | [settings.ts](settings.ts) | 内存 Key 优先于 localStorage |
+| 10 | `src/services/settings.ts` | `api key setter` | [settings.ts](settings.ts) | 有加密桥时只写原生，**先 return** 不落明文 |
+| 11 | `src/services/chat/history/toLocal.ts` | `no toSorted` | [es2023-methods.ts](es2023-methods.ts) | ES2023 方法在老内核上是 undefined |
+| 12 | `src/services/chat/store.ts` | `no toReversed` | [es2023-methods.ts](es2023-methods.ts) | 同上 |
+| 13 | `src/services/chat/db.ts` | `merge staging helpers` | [db.merge.ts](db.merge.ts) | 合并导入需要 3 个暂存辅助函数 |
+| 14 | `src/services/chat/backup.ts` | `export snapshot` | [backup.ts](backup.ts) | 拆出不入队的导出，供导入前自动备份复用 |
+| 15 | `src/services/chat/backup.ts` | `merge import` | [backup.ts](backup.ts) | 把「替换」改成「合并」 |
+| 16 | `src/components/chatInput/useVoiceInput.ts` | `mic guidance import` | [useVoiceInput.ts](useVoiceInput.ts) | 引入永久拒绝的引导 |
+| 17 | `src/components/chatInput/useVoiceInput.ts` | `mic guidance` | [useVoiceInput.ts](useVoiceInput.ts) | 仅 `NotAllowedError` 时问原生，其余照旧 |
 
 新增文件（不进上游，放在 `web/src/shell/`）见 `web-patches/`，共 10 个。
 
@@ -65,6 +68,6 @@
 
 > **锚点宁可失败也不要静默跳过**
 > 如果用了模糊匹配（例如只匹配 `const sorted =`），上游改了这行之后补丁会「成功」
-> 但补错位置，产出一个看似正常、实际有问题的包。所以 14 处全部是
+> 但补错位置，产出一个看似正常、实际有问题的包。所以 17 处全部是
 > `replaceOnce` / `insertOnce`：找不到、或找到多处，都立刻抛错。
 > 升级时花十分钟对齐锚点，比发布后排查一个静默的数据丢失便宜得多。

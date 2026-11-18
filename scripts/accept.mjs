@@ -64,18 +64,18 @@ const makeBridge = ({ apiKey }) => `
     nativePromise: (plugin, method, options) => {
       window.__BRIDGE_CALLS__.push(plugin + '.' + method)
       // 安全存储：读返回预设 Key，写/删只记调用
-      if (plugin === 'ChatDemoSecureStorage' && method === 'read') {
+      if (plugin === 'DeepChatSecureStorage' && method === 'read') {
         return Promise.resolve({ value: apiKey })
       }
-      if (plugin === 'ChatDemoSecureStorage' && (method === 'write' || method === 'remove')) {
+      if (plugin === 'DeepChatSecureStorage' && (method === 'write' || method === 'remove')) {
         return Promise.resolve({})
       }
       // 麦克风：默认未授权但可申请
-      if (plugin === 'ChatDemoMic' && method === 'check') {
+      if (plugin === 'DeepChatMic' && method === 'check') {
         return Promise.resolve({ state: 'prompt', canRequest: true, blocked: false, oneTimeSupported: true })
       }
       // 文件：无待处理文件
-      if (plugin === 'ChatDemoFiles' && method === 'hasPendingFile') {
+      if (plugin === 'DeepChatFiles' && method === 'hasPendingFile') {
         return Promise.resolve({ pending: false })
       }
       return Promise.reject(new Error('unstubbed native call: ' + plugin + '.' + method))
@@ -148,7 +148,7 @@ const scenario = async ({ label, scripts, before, probe = PROBE }) => {
     }
     return await browser.evaluate(probe)
   } finally {
-    browser?.close()
+    await browser?.close()
     await server.close()
   }
 }
@@ -187,9 +187,13 @@ const main = async () => {
   })
   check(fresh.errors.length === 0, 'A2 无未捕获异常', fresh.errors)
   check(fresh.hasOnboarding === true, 'A3 出现首次引导层')
+  // 断言「是欢迎首屏」而不是某个具体字符串：文案改过一次，硬编码容易悄悄失效。
+  // 同时要求出现产品名，防止退回成上游的 demo 措辞。
   check(
-    typeof fresh.onboardingTitle === 'string' && fresh.onboardingTitle.includes('开始使用'),
-    'A4 引导层是「开始使用」首屏',
+    typeof fresh.onboardingTitle === 'string' &&
+      fresh.onboardingTitle.includes('Deep Chat') &&
+      !/demo|演示/i.test(fresh.onboardingTitle),
+    'A4 引导层是欢迎首屏且带产品名',
     fresh.onboardingTitle
   )
   check(fresh.onboardingFlag === true, 'A5 __CHAT_DEMO_ONBOARDING__ 置为 true（让位给引导层）')
@@ -197,7 +201,7 @@ const main = async () => {
   check(fresh.hasImportBridge === true, 'A7 导入桥已安装')
   check(fresh.hasKeyStore === true, 'A8 Key 存储桥已安装')
   check(
-    fresh.bridgeCalls.includes('ChatDemoSecureStorage.read'),
+    fresh.bridgeCalls.includes('DeepChatSecureStorage.read'),
     'A9 启动时确实向原生读取了 Key',
     fresh.bridgeCalls
   )

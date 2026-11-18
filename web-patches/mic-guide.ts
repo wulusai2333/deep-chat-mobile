@@ -65,7 +65,7 @@ export const guideBlockedMic = async (): Promise<boolean> => {
   card.append(
     title('需要麦克风权限'),
     paragraph(
-      '系统已不再询问麦克风的授权，语音输入无法使用。请到「设置 → 应用 → Chat Demo → 权限」中允许麦克风。',
+      '系统已不再询问麦克风的授权，语音输入无法使用。请到「设置 → 应用 → Deep Chat → 权限」中允许麦克风。',
       c.muted
     )
   )
