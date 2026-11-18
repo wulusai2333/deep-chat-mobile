@@ -105,8 +105,10 @@ chat-demo，本项目补上了移动端 UI、本地会话存储、API Key 加密
 
 ## 安装（使用者）
 
-> 本仓库**不提交 APK**（二进制产物在 `.gitignore` 里）。正式发布后从 **GitHub Releases**
-> 下载；未发布时请按下一节自行构建。
+> 本仓库**不提交 APK**（二进制产物在 `.gitignore` 里）。请从
+> [**GitHub Releases**](https://github.com/wulusai2333/deep-chat-mobile/releases) 下载
+> （当前最新为 [v0.2.2](https://github.com/wulusai2333/deep-chat-mobile/releases/tag/v0.2.2)）；
+> 也可以按下一节从源码自行构建。
 
 1. 下载 `DeepChat-<version>-release.apk`（发布页会同时给出 APK 的 SHA-256 与证书指纹）。
 2. 允许「安装未知来源应用」（针对你用来打开 APK 的应用：文件管理器 / 浏览器 / 微信，
