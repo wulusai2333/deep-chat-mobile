@@ -130,6 +130,28 @@ const INIT_SCRIPT = `(() => {
       localStorage.setItem('chat-demo:theme-preference', 'light')
     }
   } catch {}
+  // 余额接口桩：截图里要看到真实的余额排版，而不是失败态；只拦 /user/balance
+  if (!window.__BALANCE_STUBBED__) {
+    window.__BALANCE_STUBBED__ = true
+    const originalFetch = window.fetch.bind(window)
+    window.fetch = (input, init) => {
+      const url = typeof input === 'string' ? input : (input && input.url) || ''
+      if (url.endsWith('/user/balance')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              is_available: true,
+              balance_infos: [
+                { currency: 'CNY', total_balance: '123.45', granted_balance: '23.45', topped_up_balance: '100.00' },
+              ],
+            }),
+            { status: 200, headers: { 'Content-Type': 'application/json' } }
+          )
+        )
+      }
+      return originalFetch(input, init)
+    }
+  }
 })()`
 
 const shot = async (browser, dir, name) => {

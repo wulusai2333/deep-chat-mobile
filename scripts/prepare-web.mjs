@@ -875,6 +875,13 @@ const readDirectoryCached = (file: File): Promise<{ entries: Entry[]; offset: nu
   avatarUpdated: '头像已更新',
   avatarReset: '已恢复默认头像',
   avatarReadFailed: '图片读取失败，请换一张',
+  balanceLabel: '余额',
+  balanceLoading: '余额查询中…',
+  balanceRefresh: '刷新余额',
+  balanceKeyInvalid: 'Key 无效',
+  balanceNetworkError: '网络异常',
+  balanceFetchFailed: '获取失败',
+  balanceInsufficient: '余额不足',
   // ── mobile-ui: mobile strings end ──
 `
 
@@ -901,6 +908,13 @@ const readDirectoryCached = (file: File): Promise<{ entries: Entry[]; offset: nu
   avatarUpdated: 'Avatar updated',
   avatarReset: 'Avatar reset to default',
   avatarReadFailed: 'Could not read the image, try another',
+  balanceLabel: 'Balance',
+  balanceLoading: 'Checking balance…',
+  balanceRefresh: 'Refresh balance',
+  balanceKeyInvalid: 'Invalid API key',
+  balanceNetworkError: 'Network error',
+  balanceFetchFailed: 'Failed to load',
+  balanceInsufficient: 'Insufficient balance',
   // ── mobile-ui: mobile strings end ──
 `
 

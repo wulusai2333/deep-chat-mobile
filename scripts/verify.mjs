@@ -439,6 +439,7 @@ const checkPatches = () => {
     'chatinput/MobileChatInput.tsx',
     'topbar/MobileTopBar.tsx',
     'drawer/MobileDrawer.tsx',
+    'balance/useBalance.ts',
   ]
   if (existsSync(mobileDir)) {
     for (const file of mobileFiles) {

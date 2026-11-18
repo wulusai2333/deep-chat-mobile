@@ -21,6 +21,8 @@
   --m-text-secondary: #8a8f99;
   --m-text-placeholder: #b0b4bd;
   --m-text-inverted: #ffffff;
+  /* 警示（余额不足等） */
+  --m-danger: #e5484d;
 
   /* 面 */
   --m-page-bg: #ffffff;
@@ -47,6 +49,7 @@ body[data-ds-dark-theme] {
   --m-text: #e9e9ec;
   --m-text-secondary: #9a9aa2;
   --m-text-placeholder: #77777f;
+  --m-danger: #ff7b72;
   --m-page-bg: #1a1a1e;
   --m-composer-bg: #26262b;
   --m-composer-line: rgba(255, 255, 255, 0.06);

@@ -9,7 +9,7 @@
 >
 > **使用前请先读 [免责声明](#免责声明)**。API Key 需要你自己准备，费用与额度由上游服务决定。
 
-当前版本 **0.2.2**。0.2.2 本地验证结果：`pnpm verify` 105/105、`pnpm accept` 43/43、
+当前版本 **0.2.3**。0.2.3 本地验证结果：`pnpm verify` 106/106、`pnpm accept` 46/46、
 `pnpm test:import` 43/43、TypeScript 0 错误（数字随版本变化，以脚本实际输出为准）。
 
 ---
@@ -97,6 +97,7 @@ chat-demo，本项目补上了移动端 UI、本地会话存储、API Key 加密
 | API Key 加密存储 | `EncryptedSharedPreferences` + Android Keystore（AES-256-GCM），Key 不落 localStorage / IndexedDB 明文；首启引导会先验证 Key 再进主界面 |
 | 历史 ZIP **合并**导入 | 导入前自动备份当前全部会话；同 id 取 `updatedAt` 较新者、不同 id 追加，**不覆盖本机**；重复导入幂等；支持应用内选择文件与「用其他应用打开 ZIP」两条入口 |
 | 朗读 | 顶栏喇叭朗读当前会话最后一条有正文的回答；朗读中喇叭**变为品牌蓝**（`aria-pressed`/`data-reading` 可测），再点一次停止 |
+| API 余额 | 抽屉账户行显示当前 API Key 的余额：打开抽屉自动查询（60s 内不重复），点余额可手动刷新；支持多币种，Key 无效 / 网络异常 / 余额不足都有明确提示。余额只存在内存，不落盘、不进导出的历史 ZIP |
 | 深色模式 | 跟随系统 / 手动切换，移动端组件有自己的浅色与深色 token |
 | 安全区与中文输入法 | `viewport-fit=cover` + `env(safe-area-inset-*)` 适配刘海与手势条；`captureInput: false` 保证拼音组合输入正常 |
 | PWA 兜底 | 同一份 `dist/` 可打成可直接部署的 PWA（鸿蒙 NEXT 用户的过渡方案，能力有降级） |
@@ -107,7 +108,7 @@ chat-demo，本项目补上了移动端 UI、本地会话存储、API Key 加密
 
 > 本仓库**不提交 APK**（二进制产物在 `.gitignore` 里）。请从
 > [**GitHub Releases**](https://github.com/wulusai2333/deep-chat-mobile/releases) 下载
-> （当前最新为 [v0.2.2](https://github.com/wulusai2333/deep-chat-mobile/releases/tag/v0.2.2)）；
+> （当前最新为 [v0.2.3](https://github.com/wulusai2333/deep-chat-mobile/releases/tag/v0.2.3)）；
 > 也可以按下一节从源码自行构建。
 
 1. 下载 `DeepChat-<version>-release.apk`（发布页会同时给出 APK 的 SHA-256 与证书指纹）。
@@ -252,6 +253,9 @@ git 跟踪、git 历史里也没有（公开仓库的前提）。
   不写 cookie、不进 IndexedDB。没有自建后端，也没有账号体系。
 - **无遥测**：不收集统计、不上报崩溃、无广告、无第三方分析 SDK。
   应用只连接你配置的 API 服务（默认 `https://api.deepseek.com`）。
+- **余额查询**：打开抽屉时会向 API 发一次 `GET /user/balance`（只带 `Authorization` 头，
+  不发送任何会话内容），结果显示为 `余额 ¥12.34`；余额只存在内存、不写 localStorage /
+  IndexedDB，也不进导出的历史 ZIP。
 - **不参与系统备份**：`allowBackup="false"` + `dataExtractionRules` 双保险，
   云备份和换机迁移都带不走数据，跨设备靠手动导出/导入 ZIP。
 - **最小权限**：只申请 `INTERNET`、`RECORD_AUDIO`、`MODIFY_AUDIO_SETTINGS`；
@@ -293,6 +297,7 @@ git 跟踪、git 历史里也没有（公开仓库的前提）。
 | 朗读没声音 | 检查媒体音量与静音；TTS 需要网络与 API 额度；部分文本服务端无法合成会提示 |
 | 点「+ → 拍照/相册」没反应 | 需要系统里有相机/相册应用，且 WebView 的 file chooser 未被系统或安全软件拦截；可改用「文件」入口 |
 | 提示 Key 无效 / 余额不足 | 到上游控制台检查 Key、余额与限流；本项目只负责调用 |
+| 余额显示「--」「Key 无效」「网络异常」或「获取失败」 | 余额来自 `GET /user/balance`：需要联网、Key 有效且有查询权限；点一下余额文字即可重试。刚打开抽屉时可能先显示「余额查询中…」 |
 | 换手机后聊天记录没了 | 设计为纯本地存储；用旧机导出 ZIP、新机导入。系统云备份不覆盖应用数据 |
 | APK 为什么不在仓库里 | 二进制产物不入库：请从 GitHub Releases 下载，或按本文从源码构建 |
 | 能上架应用商店 / 自动更新吗 | 不能也不计划：只做侧载，升级靠手动安装新 APK |

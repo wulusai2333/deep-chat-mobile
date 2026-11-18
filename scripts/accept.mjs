@@ -334,9 +334,42 @@ const main = async () => {
     }
   })()`
 
+  /** 余额接口桩：返回固定余额；可切 401 验证错误与重试，其余请求照常走真实 fetch */
+  const BALANCE_STUB = `
+  (() => {
+    const originalFetch = window.fetch.bind(window)
+    window.__BALANCE_CALLS__ = 0
+    window.__BALANCE_MODE__ = 'ok'
+    const okBody = JSON.stringify({
+      is_available: true,
+      balance_infos: [
+        { currency: 'CNY', total_balance: '123.45', granted_balance: '23.45', topped_up_balance: '100.00' },
+      ],
+    })
+    window.fetch = (input, init) => {
+      const url = typeof input === 'string' ? input : (input && input.url) || ''
+      if (url.endsWith('/user/balance')) {
+        window.__BALANCE_CALLS__ = (window.__BALANCE_CALLS__ || 0) + 1
+        if (window.__BALANCE_MODE__ === '401') {
+          return Promise.resolve(
+            new Response(JSON.stringify({ error: { message: 'Authentication Fails' } }), {
+              status: 401,
+              headers: { 'Content-Type': 'application/json' },
+            })
+          )
+        }
+        return Promise.resolve(
+          new Response(okBody, { status: 200, headers: { 'Content-Type': 'application/json' } })
+        )
+      }
+      return originalFetch(input, init)
+    }
+  })()
+  `
+
   const mobile = await scenario({
     label: 'mobile',
-    scripts: [ERROR_TRAP, makeBridge({ apiKey: 'sk-test-0123456789abcdef0123456789abcdef' }), `window.localStorage.clear()`],
+    scripts: [ERROR_TRAP, makeBridge({ apiKey: 'sk-test-0123456789abcdef0123456789abcdef' }), BALANCE_STUB, `window.localStorage.clear()`],
     before: async (browser) => {
       await browser.setViewport({ width: 393, height: 852, scale: 2, mobile: true })
       await browser.evaluate(`new Promise((r) => setTimeout(r, 700))`)
@@ -399,6 +432,30 @@ const main = async () => {
           srcLength: resetImg ? resetImg.src.length : 0,
           srcTail: resetImg ? resetImg.src.slice(-24) : null,
         }
+
+        // 余额：自动拉取 → 401 错误 → 切回正常重试；点余额不应打开设置弹窗
+        const readBalance = () => {
+          const node = document.querySelector('[data-balance="local"]')
+          return node
+            ? {
+                text: (node.textContent || '').trim(),
+                status: node.getAttribute('data-balance-status'),
+                calls: window.__BALANCE_CALLS__ || 0,
+              }
+            : null
+        }
+        await new Promise((r) => setTimeout(r, 400))
+        window.__MOBILE_PROBE__.balanceReady = readBalance()
+        window.__BALANCE_MODE__ = '401'
+        const balanceNode = document.querySelector('[data-balance="local"]')
+        if (balanceNode) balanceNode.click()
+        await new Promise((r) => setTimeout(r, 400))
+        window.__MOBILE_PROBE__.balanceError = readBalance()
+        window.__MOBILE_PROBE__.balanceOpenedSettings = (document.body.innerText || '').includes('通用设置')
+        window.__BALANCE_MODE__ = 'ok'
+        if (balanceNode) balanceNode.click()
+        await new Promise((r) => setTimeout(r, 400))
+        window.__MOBILE_PROBE__.balanceRetry = readBalance()
       })()`)
     },
     probe: MOBILE_PROBE,
@@ -455,6 +512,30 @@ const main = async () => {
     avatarReset.srcLength === avatar.srcLength && avatarReset.srcTail === avatar.srcTail,
     'F18 清掉自选头像后恢复默认 App 图标',
     avatarReset
+  )
+
+  // 余额：默认拉取显示金额；失败（401）显示原因且不误开设置；切回正常后点余额能重试恢复
+  const balanceReady = mobile.probe.balanceReady || {}
+  check(
+    balanceReady.status === 'ready' && /123\.45/.test(balanceReady.text || ''),
+    'F19 抽屉账户行显示 API 余额',
+    balanceReady
+  )
+  const balanceError = mobile.probe.balanceError || {}
+  check(
+    balanceError.status === 'error' &&
+      (balanceError.text || '').includes('Key 无效') &&
+      mobile.probe.balanceOpenedSettings === false,
+    'F20 余额失败显示原因且不误开设置',
+    balanceError
+  )
+  const balanceRetry = mobile.probe.balanceRetry || {}
+  check(
+    balanceRetry.status === 'ready' &&
+      /123\.45/.test(balanceRetry.text || '') &&
+      (balanceRetry.calls || 0) > (balanceReady.calls || 0),
+    'F21 点余额可重试并恢复显示',
+    balanceRetry
   )
 
   // ══ 场景 G：朗读按钮的播放/停止开关态（F15）══

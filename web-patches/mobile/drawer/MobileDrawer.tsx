@@ -45,6 +45,7 @@ import { showToast } from '../../components/base/toastState.js'
 import { openSettings } from '../../components/settings/settingsDialogState.js'
 import { closeMobileSider, useMobileSider } from '../../components/sider/mobileSiderState.js'
 import { useTranslate, type TranslationKey } from '../../i18n/index.js'
+import { formatBalance, useBalance } from '../balance/useBalance.js'
 import { APP_ICON_DATA_URL } from '../common/app-icon-data.js'
 import { fileToAvatarDataUrl } from '../common/avatar-image.js'
 import { resetLocalAvatar, setLocalAvatar, useLocalAvatar } from '../common/localAvatar.js'
@@ -290,6 +291,9 @@ export const MobileDrawer = () => {
   const avatarInputRef = useRef<HTMLInputElement>(null)
   const avatarUrl = useLocalAvatar()
   const avatarCustom = avatarUrl !== APP_ICON_DATA_URL
+  // 账户余额：抽屉打开时自动拉取（60s 缓存），点余额强制刷新；只存在内存里
+  const apiKey = useSettings((state) => state.apiKey)
+  const { state: balance, refresh: refreshBalance } = useBalance(apiKey, open)
 
   // 抽屉关闭后清掉搜索态：下次打开回到会话列表（官方 App 的行为），
   // 避免「点了搜索结果 → 再打开抽屉还是搜索结果」。
@@ -470,6 +474,33 @@ export const MobileDrawer = () => {
     },
   ]
 
+  // 余额展示：无 Key 整行隐藏；loading / 正常 / 余额不足 / 各类失败各一句
+  const balanceStatus = apiKey === null ? 'hidden' : balance.status
+  const balanceInsufficient = balance.status === 'ready' && !balance.available
+  const balanceText = (() => {
+    if (apiKey === null) {
+      return ''
+    }
+    if (balance.status === 'loading') {
+      return t('balanceLoading')
+    }
+    if (balance.status === 'ready') {
+      return balance.available
+        ? `${t('balanceLabel')} ${formatBalance(balance.infos) || '—'}`
+        : t('balanceInsufficient')
+    }
+    if (balance.status === 'error') {
+      if (balance.error === 'unauthorized') {
+        return `${t('balanceLabel')} ${t('balanceKeyInvalid')}`
+      }
+      if (balance.error === 'network') {
+        return `${t('balanceLabel')} ${t('balanceNetworkError')}`
+      }
+      return t('balanceFetchFailed')
+    }
+    return t('balanceLabel')
+  })()
+
   return (
     <div className={styles.panel}>
       <SearchBox query={query} onChange={setQuery} onClear={() => setQuery('')} />
@@ -576,7 +607,25 @@ export const MobileDrawer = () => {
               data-avatar="local"
             />
           </span>
-          <span className={styles.accountName}>{t('localAccountName')}</span>
+          <span className={styles.accountText}>
+            <span className={styles.accountName}>{t('localAccountName')}</span>
+            {apiKey === null ? null : (
+              <button
+                type="button"
+                className={clsx(styles.balance, balanceInsufficient && styles.balanceDanger)}
+                data-balance="local"
+                data-balance-status={balanceStatus}
+                aria-label={t('balanceRefresh')}
+                onClick={(event) => {
+                  // 账户行本身点击=打开设置；点余额只刷新，不弹设置
+                  event.stopPropagation()
+                  refreshBalance()
+                }}
+              >
+                {balanceText}
+              </button>
+            )}
+          </span>
           {/* Menu 的浮层用 portal 挂到 body，但 React 事件仍沿组件树冒泡：
               在菜单项上点击会一路冒泡到账户行的 onClick（=打开设置）。
               这里用一层 span 在组件树里截断，避免「切主题顺手打开设置」。 */}

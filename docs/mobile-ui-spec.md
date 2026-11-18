@@ -226,7 +226,11 @@ i18n 文案、`main.tsx` 引入 mobile.css 这类小改动，继续用 prepare-w
      - 左：圆形头像 32px（默认 **App 图标**，`<img data-avatar="local">` 圆形裁切；
        点头像 = 系统选图，压成 256×256 JPEG 存 `localStorage`，可恢复默认）。
        头像不进导出的历史 ZIP（属于本机外观偏好）。
-     - 中：`t('localAccountName')`，16px
+     - 中：竖排文字列 —— 上 `t('localAccountName')` 16px；下 **API 余额** 12px 弱化色：
+       `余额 ¥12.34`（多币种用 ` / ` 连接）。打开抽屉自动查询（60s 内不重复），
+       点余额强制刷新且不冒泡到账户行；状态文案：`余额查询中…` / `余额不足`（`--m-danger`）/
+       `余额 Key 无效` / `余额 网络异常` / `获取失败`；无 API Key 时整行隐藏。
+       余额只存内存，不落盘、不进历史 ZIP。
      - 右：`…` 按钮 → `Menu`：`t('changeAvatar')` / 已自选时多一项 `t('resetAvatar')`、
        `t('settings')`（`openSettings('general')`）、
        `t('theme')`（在 浅色/深色/跟随系统 间切换，复用 `setThemePreference`）
@@ -268,6 +272,13 @@ i18n 文案、`main.tsx` 引入 mobile.css 这类小改动，继续用 prepare-w
 | `avatarUpdated` | 头像已更新 | Avatar updated |
 | `avatarReset` | 已恢复默认头像 | Avatar reset to default |
 | `avatarReadFailed` | 图片读取失败，请换一张 | Could not read the image, try another |
+| `balanceLabel` | 余额 | Balance |
+| `balanceLoading` | 余额查询中… | Checking balance… |
+| `balanceRefresh` | 刷新余额 | Refresh balance |
+| `balanceKeyInvalid` | Key 无效 | Invalid API key |
+| `balanceNetworkError` | 网络异常 | Network error |
+| `balanceFetchFailed` | 获取失败 | Failed to load |
+| `balanceInsufficient` | 余额不足 | Insufficient balance |
 
 已有键直接用：`thinkingSwitch`、`search`、`send`、`chatInputStopButtonTooltip`、`voiceInput`、
 `close`、`more`、`newChat`、`expandSiderbarButton`、`ttsPlay`、`ttsStop`、`settings`、
@@ -336,3 +347,6 @@ node scripts/ui-preview.mjs
    （顶栏图标位置、卡片高度、字号）与官方数值吻合。
 5. 官方「按住说话」录音时是否会先出转写中间态、上滑取消的阈值等细节无法从静态截图确认，
    按常见语音输入交互实现（<0.6s 提示太短、上滑 60px 取消）。
+6. **账户行余额是本项目新增的实用信息**，官方 App 账户行只显示名称。数据来自官方
+   `GET /user/balance`，打开抽屉自动查询、点击可刷新；余额不足 / Key 无效 / 网络异常
+   都有独立文案，且余额只存在内存，不落盘、不进历史 ZIP。

@@ -281,7 +281,6 @@
 }
 
 .accountName {
-  flex: 1;
   min-width: 0;
   overflow: hidden;
   font-size: 16px;
@@ -289,6 +288,44 @@
   white-space: nowrap;
   text-overflow: ellipsis;
   color: var(--m-text);
+}
+
+/* 账户行左侧文字列：上面「本地用户」，下面一行余额（12px 弱化色） */
+.accountText {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+}
+
+/* 余额文字本身也是按钮：点一下手动刷新（不冒泡到账户行，避免顺带打开设置） */
+.balance {
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: none;
+  background: none;
+  color: var(--m-text-secondary);
+  font: inherit;
+  font-size: 12px;
+  line-height: 16px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.balance:active {
+  opacity: 0.6;
+}
+
+/* is_available=false：余额不足，用警示色（tokens 见 common/mobile.css） */
+.balanceDanger {
+  color: var(--m-danger, #e5484d);
 }
 
 .menuSlot {
