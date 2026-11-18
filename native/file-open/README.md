@@ -1,4 +1,4 @@
-# ChatDemoFiles —— 文件出入插件
+# DeepChatFiles —— 文件出入插件
 
 负责两件方向相反的事：
 
@@ -15,7 +15,7 @@
 - `<a download>`：会落到 `Download/` 且需要用户二次确认，无法静默
 - IndexedDB / localStorage：不是「能拿出去的文件」，卸载即失
 
-要写到 `Documents/ChatDemo/` 让用户能在文件管理器里找到，只有原生能做。
+要写到 `Documents/DeepChat/` 让用户能在文件管理器里找到，只有原生能做。
 
 ### 读外部 ZIP：WebView 拿不到 content URI
 
@@ -42,7 +42,7 @@ WebView 的 JS 层没有 API 能把它变成 `File`/`Blob`。
 
 ## API
 
-插件名：`ChatDemoFiles`
+插件名：`DeepChatFiles`
 
 ### `saveBackup({ fileName, data })`
 
@@ -50,16 +50,16 @@ WebView 的 JS 层没有 API 能把它变成 `File`/`Blob`。
 
 ```ts
 // 请求
-{ fileName: 'chat-demo-backup-20261118-193000.zip', data: '<base64>' }
+{ fileName: 'deep-chat-backup-20261118-193000.zip', data: '<base64>' }
 // 响应
-{ path: 'Documents/ChatDemo/chat-demo-backup-20261118-193000.zip' }  // 或 API 24-28 的绝对路径
+{ path: 'Documents/DeepChat/deep-chat-backup-20261118-193000.zip' }  // 或 API 24-28 的绝对路径
 ```
 
 - `fileName` 里的 `/` `\` 会被替换成 `_`，含 `..` 直接拒绝（防路径穿越）
 - 上限 **48 MB**，超了抛错
-- API 29+ 走 `MediaStore`：`RELATIVE_PATH = Documents/ChatDemo`，
+- API 29+ 走 `MediaStore`：`RELATIVE_PATH = Documents/DeepChat`，
   用 `IS_PENDING` 1→0 保证别的应用不会读到写了一半的文件
-- API 24–28 走 `getExternalFilesDir(DIRECTORY_DOCUMENTS)/ChatDemo`，
+- API 24–28 走 `getExternalFilesDir(DIRECTORY_DOCUMENTS)/DeepChat`，
   返回绝对路径（那个目录在文件管理器里通常看不见，需要 adb 访问）
 
 ### `hasPendingFile()`
@@ -154,13 +154,13 @@ adb push deepseek_data-20261118.zip /sdcard/Download/
 # 3. 模拟「用其他应用打开」
 adb shell am start -a android.intent.action.VIEW `
   -d content://com.android.providers.downloads.documents/document/1 `
-  -t application/zip -n com.example.chatdemo/.MainActivity
+  -t application/zip -n com.deepchat.app/.MainActivity
 
 # 4. 看有没有接住
 adb logcat -s Capacitor/Console:V Capacitor:V
 
 # 5. 确认备份写出来了
-adb shell ls -l /sdcard/Documents/ChatDemo/
+adb shell ls -l /sdcard/Documents/DeepChat/
 ```
 
 往 `Downloads` 里查也能看到：`adb shell content query --uri content://media/external/downloads`。

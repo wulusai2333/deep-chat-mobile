@@ -239,7 +239,7 @@ const applyPatches = () => {
   )
 
   // ── 补丁 2c：首启引导期间让上游别抢着弹设置窗 ────────────────────────────
-  // 壳层在检测到「设备上还没有 Key」时置 __CHAT_DEMO_ONBOARDING__，
+  // 壳层在检测到「设备上还没有 Key」时置 __DEEP_CHAT_ONBOARDING__，
   // 由引导页负责收集 Key。若不拦，用户会同时看到引导页和设置弹窗两个入口。
   replaceOnce(
     'src/components/settings/settingsDialogState.ts',
@@ -258,7 +258,7 @@ const applyPatches = () => {
   // mobile-shell: onboarding owns key prompt —— 原生壳首启时由引导页收集 Key，
   // 这里不要再弹设置窗，否则两个获取 Key 的入口同时出现。
   // 引导页被跳过或失败时会把该标志复位，回落到上游行为。
-  if (typeof window !== 'undefined' && window.__CHAT_DEMO_ONBOARDING__) {
+  if (typeof window !== 'undefined' && window.__DEEP_CHAT_ONBOARDING__) {
     return false
   }
   openSettings('data')
@@ -293,9 +293,9 @@ type ShellKeyStore = {
 declare global {
   interface Window {
     __RUNTIME_KEY__?: string | null
-    __CHAT_DEMO_KEYSTORE__?: ShellKeyStore
+    __DEEP_CHAT_KEYSTORE__?: ShellKeyStore
     /** 首启引导是否正在接管 Key 提示；上游 ensureApiKey 会读它 */
-    __CHAT_DEMO_ONBOARDING__?: boolean
+    __DEEP_CHAT_ONBOARDING__?: boolean
   }
 }
 
@@ -306,7 +306,7 @@ const injectedApiKey = (): string | null => {
 
 /** 原生在页面加载后才注入时（冷启动竞态兜底），同步到 store */
 if (typeof window !== 'undefined') {
-  window.addEventListener('chat-demo:runtime-key', () => {
+  window.addEventListener('deep-chat:runtime-key', () => {
     const value = injectedApiKey()
     if (value !== useSettings.getState().apiKey) {
       useSettings.setState({ apiKey: value })
@@ -332,7 +332,7 @@ if (typeof window !== 'undefined') {
 }`,
     `export const setApiKey = (apiKey: string | null) => {
   // mobile-shell: api key setter —— 有加密存储桥时只写原生，绝不写 localStorage
-  const keystore = typeof window === 'undefined' ? undefined : window.__CHAT_DEMO_KEYSTORE__
+  const keystore = typeof window === 'undefined' ? undefined : window.__DEEP_CHAT_KEYSTORE__
   if (keystore) {
     window.__RUNTIME_KEY__ = apiKey
     void keystore.set(apiKey).catch((error: unknown) => {
@@ -546,7 +546,7 @@ export const exportHistory = (): Promise<{ name: string; blob: Blob }> =>
   enqueueBackup(async () => {
     // mobile-shell: merge import —— 原生壳里换成「合并」而不是「覆盖」，
     // 避免导入别处的备份时抹掉手机上已有的对话。桥不存在时回退到上游覆盖逻辑。
-    const bridge = window.__CHAT_DEMO_IMPORT__
+    const bridge = window.__DEEP_CHAT_IMPORT__
     if (bridge) {
       const result = await bridge.merge(file)
       return result.added + result.updated

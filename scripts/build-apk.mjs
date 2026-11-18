@@ -56,8 +56,8 @@ const versionArgs = () => {
   const [major = 0, minor = 0, patch = 0] = version.split('.').map((part) => Number.parseInt(part, 10) || 0)
   const code = major * 10000 + minor * 100 + patch
   return [
-    `-PchatdemoVersionName=${version}`,
-    `-PchatdemoVersionCode=${code}`,
+    `-PdeepchatVersionName=${version}`,
+    `-PdeepchatVersionCode=${code}`,
   ]
 }
 
@@ -90,7 +90,7 @@ const main = async () => {
     const from = join(outputDir, name)
     // 目标名带版本与架构，方便同时保留多个版本、也方便发出去时一眼看到版本
     const version = pkgVersion()
-    const target = join(paths.outApk, `chat-demo-${version}-${arch}-${buildType.toLowerCase()}.apk`)
+    const target = join(paths.outApk, `deep-chat-${version}-${arch}-${buildType.toLowerCase()}.apk`)
     copyFileSync(from, target)
     const size = statSync(target).size
     info(`${target}`)
@@ -99,7 +99,7 @@ const main = async () => {
 
   if (isRelease) {
     // 确认签名状态：未签名包不能装到真机，这个检查能省掉一次「装不上」的排查
-    const apk = join(paths.outApk, `chat-demo-${pkgVersion()}-${arch}-release.apk`)
+    const apk = join(paths.outApk, `deep-chat-${pkgVersion()}-${arch}-release.apk`)
     try {
       const { stdout } = await capture(
         join(process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT, 'build-tools', '36.0.0', 'apksigner.bat'),

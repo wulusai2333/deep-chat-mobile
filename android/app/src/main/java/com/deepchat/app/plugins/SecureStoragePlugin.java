@@ -44,7 +44,7 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 public class SecureStoragePlugin extends Plugin {
 
     /** prefs 文件名。改名会让已存的 Key 丢失，不要动。 */
-    private static final String PREFS_NAME = "chat-demo-secure";
+    private static final String PREFS_NAME = "deep-chat-secure";
 
     /** 存 Key 的键名 */
     private static final String KEY_API_KEY = "api-key";

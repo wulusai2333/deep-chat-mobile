@@ -14,16 +14,16 @@ import { existsSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fail, info, paths, run, step, warn } from './lib/env.mjs'
 
-const KEYSTORE_FILE = 'chat-demo.keystore'
-const KEY_ALIAS = 'chatdemo'
+const KEYSTORE_FILE = 'deep-chat.keystore'
+const KEY_ALIAS = 'deepchat'
 const VALIDITY_DAYS = '10000'
 
 /**
  * 口令策略：本地开发用固定值，发布前必须换成自己的。
  * 这里显式打印出来，是为了让「口令是公开的开发默认值」这件事不可能被忽略。
  */
-const DEFAULT_STORE_PASSWORD = 'chatdemo-dev'
-const DEFAULT_KEY_PASSWORD = 'chatdemo-dev'
+const DEFAULT_STORE_PASSWORD = 'deepchat-dev'
+const DEFAULT_KEY_PASSWORD = 'deepchat-dev'
 
 const main = async () => {
   const javaHome = process.env.JAVA_HOME
@@ -65,7 +65,7 @@ const main = async () => {
   ].join('\n')
   writeFileSync(join(paths.android, 'keystore.properties'), `${properties}\n`)
 
-  warn('口令是开发默认值（chatdemo-dev），仅适合自己用')
+  warn('口令是开发默认值（deepchat-dev），仅适合自己用')
   warn('要对外分发，请另生成一个 keystore 并把口令改成只有你知道的强口令')
   warn(`keystore 与口令务必离线备份 —— 丢失后无法再发布可覆盖安装的新版本`)
 }

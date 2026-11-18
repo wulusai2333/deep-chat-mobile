@@ -9,7 +9,7 @@
  * 属于大改，违反「最小 diff」。所以采取：
  *   1. 原生在页面脚本执行**之前**用 `evaluateJavascript` 写入 `window.__RUNTIME_KEY__`，
  *      保证模块初始化时 Key 已在内存里（见 MainActivity/Bridge 的注入时机）；
- *   2. 万一时序没赶上（冷启动竞态），下面用 `chat-demo:runtime-key` 事件补一次同步。
+ *   2. 万一时序没赶上（冷启动竞态），下面用 `deep-chat:runtime-key` 事件补一次同步。
  * 这样 settings.ts 只需要"优先读 window.__RUNTIME_KEY__"，改动三行以内。
  *
  * 【写入路径】
@@ -38,7 +38,7 @@ export const hydrateRuntimeKey = async (): Promise<boolean> => {
   const apiKey = typeof value === 'string' && value.length > 0 ? value : null
   window.__RUNTIME_KEY__ = apiKey
   // 通知 settings.ts 同步 store（模块可能已经初始化完毕）
-  window.dispatchEvent(new Event('chat-demo:runtime-key'))
+  window.dispatchEvent(new Event('deep-chat:runtime-key'))
   return apiKey !== null
 }
 
@@ -47,7 +47,7 @@ export const installKeyStore = (): void => {
   if (!isNativeShell()) {
     return
   }
-  window.__CHAT_DEMO_KEYSTORE__ = {
+  window.__DEEP_CHAT_KEYSTORE__ = {
     get: async () => {
       const { value } = await callNative<ReadResult>(PLUGIN_SECURE_STORAGE, 'read')
       return typeof value === 'string' && value.length > 0 ? value : null

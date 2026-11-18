@@ -56,7 +56,7 @@ import com.getcapacitor.annotation.PermissionCallback;
 public class MicPermissionPlugin extends Plugin {
 
     /** 记录「是否已经弹过系统权限窗」，用于区分「还没问」与「不再询问」 */
-    private static final String PREFS_NAME = "chat-demo-mic";
+    private static final String PREFS_NAME = "deep-chat-mic";
     private static final String KEY_REQUESTED = "requested";
 
     /**

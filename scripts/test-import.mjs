@@ -36,7 +36,7 @@ const buildBundle = async () => {
   await run(process.execPath, [rspackCli, 'build', '-c', configPath], {
     cwd: paths.root,
     // 配置里读这个变量决定输出目录
-    env: { CHATDEMO_TEST_DIR: workDir },
+    env: { DEEPCHAT_TEST_DIR: workDir },
   })
 
   const bundlePath = join(workDir, 'bundle.js')

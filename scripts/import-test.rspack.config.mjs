@@ -11,7 +11,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
-const outDir = process.env.CHATDEMO_TEST_DIR ?? path.join(root, '.tmp', 'import-test')
+const outDir = process.env.DEEPCHAT_TEST_DIR ?? path.join(root, '.tmp', 'import-test')
 
 /*
  * 注意：这里**不能** `import { rspack } from '@rspack/core'` ——

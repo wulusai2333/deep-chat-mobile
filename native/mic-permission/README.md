@@ -1,4 +1,4 @@
-# ChatDemoMic —— 麦克风权限插件
+# DeepChatMic —— 麦克风权限插件
 
 只做三件事：查状态、申请授权、跳系统设置。**不录音** —— 录音仍由网页的
 `getUserMedia` + `MediaRecorder`-风格脚本完成（见上游 `services/speech/recorder.ts`）。
@@ -26,7 +26,7 @@ Capacitor 本身已经能处理麦克风授权：网页调 `getUserMedia` 时，
 
 ## API
 
-插件名：`ChatDemoMic`
+插件名：`DeepChatMic`
 
 ### `check()`
 
@@ -117,7 +117,7 @@ Android 11 起系统多了「仅本次允许」选项。用户选它之后：
 
 ## 实现要点
 
-- `requested` 标志存在 `chat-demo-mic` 普通 SharedPreferences（**不是**加密存储 ——
+- `requested` 标志存在 `deep-chat-mic` 普通 SharedPreferences（**不是**加密存储 ——
   这里没有任何敏感数据，只是一个「问过没有」的布尔值）
 - 标志在 `requestPermissionForAlias` **之前**置位。因为 `Plugin` 没有
   `onRequestPermissionsResult` 这种钩子，结果只通过 `@PermissionCallback` 回来；
@@ -131,8 +131,8 @@ Android 11 起系统多了「仅本次允许」选项。用户选它之后：
 
 ```powershell
 # 装 debug 包后
-adb shell pm revoke com.example.chatdemo android.permission.RECORD_AUDIO
-adb shell pm clear-permission-flags com.example.chatdemo android.permission.RECORD_AUDIO user-set user-fixed
+adb shell pm revoke com.deepchat.app android.permission.RECORD_AUDIO
+adb shell pm clear-permission-flags com.deepchat.app android.permission.RECORD_AUDIO user-set user-fixed
 ```
 
 `clear-permission-flags` 里的 `user-fixed` 就是「不再询问」的标志位 —— 清掉它才能重新弹框。

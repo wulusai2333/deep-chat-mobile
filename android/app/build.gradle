@@ -8,8 +8,8 @@ android {
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         // 版本号由 scripts/build-apk.mjs 从 package.json 注入，避免两处手改不同步
-        versionCode project.findProperty('chatdemoVersionCode')?.toInteger() ?: 1
-        versionName project.findProperty('chatdemoVersionName') ?: "0.1.1"
+        versionCode project.findProperty('deepchatVersionCode')?.toInteger() ?: 1
+        versionName project.findProperty('deepchatVersionName') ?: "0.1.1"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -64,13 +64,13 @@ android {
     }
 
     /**
-     * 产物命名：chat-demo-<version>-<buildType>.apk
+     * 产物命名：deep-chat-<version>-<buildType>.apk
      * 默认名字是 app-release.apk，装多版本时无法区分，也会在多次构建间互相覆盖。
      */
     applicationVariants.all { variant ->
         variant.outputs.all { output ->
             def version = variant.versionName
-            outputFileName = "chat-demo-${version}-${variant.buildType.name}.apk"
+            outputFileName = "deep-chat-${version}-${variant.buildType.name}.apk"
         }
     }
 

@@ -90,7 +90,7 @@
 
             <!--
               「用其他应用打开 ZIP」—— 冷启动（onCreate）与热启动（onNewIntent）
-              都会把 URI 交给 ChatDemoFiles 插件。见 native/file-open/README.md。
+              都会把 URI 交给 DeepChatFiles 插件。见 native/file-open/README.md。
 
               注意 <data> 的语义：同一个 <data> 里的多个属性是「与」，
               多个 <data> 之间是「或」。所以 scheme 与 mimeType 必须写在同一行，

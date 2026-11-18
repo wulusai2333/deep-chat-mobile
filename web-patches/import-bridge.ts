@@ -75,11 +75,11 @@ export type MergeResult = {
 declare global {
   interface Window {
     /** 上游 backup.ts 补丁检测到它就改用合并导入；浏览器里不存在 */
-    __CHAT_DEMO_IMPORT__?: { merge(file: File): Promise<MergeResult> }
+    __DEEP_CHAT_IMPORT__?: { merge(file: File): Promise<MergeResult> }
   }
 }
 
-const LEDGER_KEY = 'chat-demo:import-ledger'
+const LEDGER_KEY = 'deep-chat:import-ledger'
 
 const readLedger = (): Record<string, true> => {
   const raw = readLocalStorage(LEDGER_KEY)
@@ -344,7 +344,7 @@ export const installImportBridge = (): void => {
   if (!isNativeShell()) {
     return
   }
-  window.__CHAT_DEMO_IMPORT__ = {
+  window.__DEEP_CHAT_IMPORT__ = {
     merge: async (file: File) => {
       const result = await mergeImport(file)
       // 结果页由桥自己弹：上游那边只拿到一个数字，展示不下四种统计

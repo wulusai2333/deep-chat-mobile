@@ -14,7 +14,7 @@ SharedPreferences 中；即使手机丢失，Key 也不能泄露。
 | 攻击面 | 结果 |
 | --- | --- |
 | 反编译 APK | 只看到代码，看不到 Key |
-| 拷走 `/data/data/com.example.chatdemo/` | 只有密文 + 加密后的键名 |
+| 拷走 `/data/data/com.deepchat.app/` | 只有密文 + 加密后的键名 |
 | 手机丢失 / 被刷机 | 主密钥在 Keystore 里，脱离设备无法解密 |
 | 卸载应用 | Keystore 主密钥一并销毁，密文永久不可解 |
 | 系统级备份到云端 | 已在 manifest 里 `allowBackup=false` 关闭 |
@@ -23,11 +23,11 @@ SharedPreferences 中；即使手机丢失，Key 也不能泄露。
 ## 文件
 
 - `SecureStoragePlugin.java` → 复制到
-  `android/app/src/main/java/com/example/chatdemo/plugins/SecureStoragePlugin.java`
+  `android/app/src/main/java/com/deepchat/app/plugins/SecureStoragePlugin.java`
 
 ## 接口
 
-前端通过 `window.Capacitor.nativePromise('ChatDemoSecureStorage', method, options)` 调用。
+前端通过 `window.Capacitor.nativePromise('DeepChatSecureStorage', method, options)` 调用。
 
 | 方法 | 入参 | 返回 | 说明 |
 | --- | --- | --- | --- |

@@ -22,7 +22,7 @@
  *     桥挂死也绝不白屏。
  *
  * 首启引导**不**在 shellReady 里等用户输入 —— 那样会卡住整个应用。它在
- * shellReady 之后异步浮上来，同时先把 `__CHAT_DEMO_ONBOARDING__` 置位，
+ * shellReady 之后异步浮上来，同时先把 `__DEEP_CHAT_ONBOARDING__` 置位，
  * 让上游的 ensureApiKey() 知道「首启的 Key 提示由壳层负责」，不去抢着弹自己的窗。
  */
 
@@ -39,7 +39,7 @@ const HYDRATE_TIMEOUT_MS = 1500
 declare global {
   interface Window {
     /** 首启引导是否正在接管 Key 提示；上游 ensureApiKey 会读它 */
-    __CHAT_DEMO_ONBOARDING__?: boolean
+    __DEEP_CHAT_ONBOARDING__?: boolean
   }
 }
 
@@ -63,7 +63,7 @@ const prepare = async (): Promise<void> => {
     return
   }
 
-  // 加密存储桥：上游 setApiKey 会检查 window.__CHAT_DEMO_KEYSTORE__ 是否存在
+  // 加密存储桥：上游 setApiKey 会检查 window.__DEEP_CHAT_KEYSTORE__ 是否存在
   installKeyStore()
 
   // 合并导入桥：上游导入按钮据此切到「合并」而不是「覆盖」
@@ -80,7 +80,7 @@ const prepare = async (): Promise<void> => {
   if (!hasKey) {
     // 置位后 render 才会发生（本函数在 shellReady 里），
     // 这样 App 挂载时 ensureApiKey() 一定走「别弹窗」的分支。
-    window.__CHAT_DEMO_ONBOARDING__ = true
+    window.__DEEP_CHAT_ONBOARDING__ = true
   }
 
   // 阶段二不 await：它要等用户输入，必须放到 render 之后
@@ -100,7 +100,7 @@ const afterRender = async (hasKey: boolean): Promise<void> => {
     // eslint-disable-next-line no-console
     console.error('[mobile-shell] onboarding failed', error)
     // 引导挂了就别再拦着上游的提示窗，否则用户永远没地方填 Key
-    window.__CHAT_DEMO_ONBOARDING__ = false
+    window.__DEEP_CHAT_ONBOARDING__ = false
   }
   // 引导结束（或被跳过）后处理「外部打开 ZIP」：
   // 此时 db 与 store 已就绪，且导入结果页不会和引导浮层叠在一起。

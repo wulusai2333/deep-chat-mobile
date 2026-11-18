@@ -12,7 +12,7 @@
  * App.tsx 挂载时会调 `ensureApiKey()`，没 Key 就自动打开设置弹窗。如果不管，
  * 用户会先看到「设置 - 数据管理」这个不该出现在第一次打开时的界面。
  * 所以壳在 render 之前就把 Key 读进内存，并在「本机没有 Key」时置
- * `window.__CHAT_DEMO_ONBOARDING__`，让上游的 `ensureApiKey()` 让位（见
+ * `window.__DEEP_CHAT_ONBOARDING__`，让上游的 `ensureApiKey()` 让位（见
  * prepare-web.mjs 的补丁 2c）。用户填完 Key 或跳过之后该标志复位，
  * Key 提示重新回到上游手里 —— 跳过时主动打开上游设置弹窗兜底。
  *
@@ -20,9 +20,9 @@
  * 见 ui.ts 的文件头：壳层界面不碰上游组件树，上游升级时零冲突。
  *
  * 【状态存哪里】
- * 只有「引导是否完成」这一个布尔标记进 localStorage（`chat-demo:onboarded`）。
+ * 只有「引导是否完成」这一个布尔标记进 localStorage（`deep-chat:onboarded`）。
  * API Key 进加密存储 —— 两者严格分开，本文不碰 Key 的持久化，
- * 一律通过上游的 `setApiKey()` 走 `window.__CHAT_DEMO_KEYSTORE__`。
+ * 一律通过上游的 `setApiKey()` 走 `window.__DEEP_CHAT_KEYSTORE__`。
  */
 
 import { openSettings } from '../components/settings/settingsDialogState.js'
@@ -40,7 +40,7 @@ import {
   title,
 } from './ui.js'
 
-const ONBOARDED_KEY = 'chat-demo:onboarded'
+const ONBOARDED_KEY = 'deep-chat:onboarded'
 
 /** 三步说明文案。放在一起便于以后本地化 */
 const INTRO_POINTS: readonly [string, string][] = [
@@ -177,7 +177,7 @@ const renderOnboarding = (): Promise<boolean> =>
  *
  * 【交还给上游的两个出口】
  * 引导是「额外」的一层，绝不能把用户困住。因此无论结果如何都要复位
- * `__CHAT_DEMO_ONBOARDING__`：
+ * `__DEEP_CHAT_ONBOARDING__`：
  *   • 用户填完 Key → 上游 ensureApiKey() 下次自然为 true；
  *   • 用户点「先跳过」→ 立刻打开上游的设置弹窗，让用户在自己熟悉的地方填。
  * 后者是本文件唯一的「额外依赖」：调上游的 openSettings，不复制它的 UI。
@@ -185,20 +185,20 @@ const renderOnboarding = (): Promise<boolean> =>
 export const maybeShowOnboarding = async (hasKey: boolean): Promise<void> => {
   if (!isNativeShell() || readLocalStorage(ONBOARDED_KEY) === '1') {
     // 不需要引导，把「接管 Key 提示」的职责还给上游
-    window.__CHAT_DEMO_ONBOARDING__ = false
+    window.__DEEP_CHAT_ONBOARDING__ = false
     return
   }
   if (hasKey) {
     // 已经有 Key：直接记成已完成，避免下次启动再弹
     writeLocalStorage(ONBOARDED_KEY, '1')
-    window.__CHAT_DEMO_ONBOARDING__ = false
+    window.__DEEP_CHAT_ONBOARDING__ = false
     return
   }
   // React 首屏画完再弹，避免遮罩下面一片白
   await nextPaint()
   const completed = await renderOnboarding()
   // 复位：从此 Key 提示回到上游的 ensureApiKey() 手里
-  window.__CHAT_DEMO_ONBOARDING__ = false
+  window.__DEEP_CHAT_ONBOARDING__ = false
   if (!completed) {
     // 跳过引导 → 用上游既有的设置弹窗兜底，不让用户无处输入 Key
     openSettings('data')

@@ -12,7 +12,7 @@
 **没有改上游界面**。所有改动都在 `web-patches/`，由脚本以上游原文件为基准重放补丁，见 [§5](#5-哪些地方动了上游代码)。
 
 ```
-chat-demo-mobile/
+deep-chat-mobile/
 ├── capacitor.config.ts        Capacitor 配置（scheme / 输入法 / 安全）
 ├── package.json               脚本入口
 ├── web/                       上游仓库的只读克隆（不要手改，会被 prepare 覆盖）
@@ -86,7 +86,7 @@ $env:ANDROID_SDK_ROOT = 'D:\soft\android-sdk'
 ### 1.3 装项目依赖
 
 ```powershell
-cd chat-demo-mobile
+cd deep-chat-mobile
 pnpm install                # 项目自身：Capacitor CLI + typescript
 ```
 
@@ -117,7 +117,7 @@ pnpm accept           # 8. 用无头浏览器验收打包进 APK 的那份产物
 pnpm test:import      # 9. 合并导入的端到端测试（真实 IndexedDB）
 ```
 
-产物：`dist-apk/chat-demo-0.1.1-x64-release.apk`（约 5.4 MB）
+产物：`dist-apk/deep-chat-0.1.1-x64-release.apk`（约 5.4 MB）
 
 调试包把第 6 步换成 `pnpm android:debug`，产物名带 `-debug`，用 debug 签名。
 
@@ -173,7 +173,7 @@ APK 走 Android 兼容层。详细步骤见 [install-harmony.md](./install-harmo
 
 ```powershell
 & "$env:ANDROID_HOME\platform-tools\adb.exe" devices
-& "$env:ANDROID_HOME\platform-tools\adb.exe" install -r dist-apk\chat-demo-0.1.1-x64-release.apk
+& "$env:ANDROID_HOME\platform-tools\adb.exe" install -r dist-apk\deep-chat-0.1.1-x64-release.apk
 ```
 
 `-r` 是覆盖安装、保留数据。**签名必须一致** —— 换签名只能先卸载，本地数据会全丢。
@@ -191,7 +191,7 @@ pnpm keystore
 
 产出：
 
-- `android/chat-demo.keystore` —— 私钥。**离线备份，别进 git**
+- `android/deep-chat.keystore` —— 私钥。**离线备份，别进 git**
 - `android/keystore.properties` —— 口令与别名。同样别进 git
 
 两个文件都已在 `.gitignore` 里。`build.gradle` 从 `keystore.properties` 读签名配置；
@@ -199,11 +199,11 @@ pnpm keystore
 
 ### 4.1 对外分发前必须做的
 
-脚本生成的是**开发默认口令** `chatdemo-dev`，并在输出里明确警告。要让别人装，改成自己的：
+脚本生成的是**开发默认口令** `deepchat-dev`，并在输出里明确警告。要让别人装，改成自己的：
 
 ```powershell
 & "$env:JAVA_HOME\bin\keytool.exe" -genkeypair -v `
-  -keystore android\chat-demo.keystore -alias chatdemo `
+  -keystore android\deep-chat.keystore -alias deepchat `
   -keyalg RSA -keysize 2048 -validity 10000 `
   -storepass '<强口令>' -keypass '<强口令>' `
   -dname "CN=你的名字, OU=Mobile, O=你的组织, C=CN"
@@ -215,7 +215,7 @@ pnpm keystore
 
 ```powershell
 & "$env:ANDROID_HOME\build-tools\36.0.0\apksigner.bat" verify --print-certs `
-  dist-apk\chat-demo-0.1.1-x64-release.apk
+  dist-apk\deep-chat-0.1.1-x64-release.apk
 ```
 
 `build-apk.mjs` 在 release 结束时自动跑这一步。

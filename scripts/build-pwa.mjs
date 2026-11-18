@@ -117,7 +117,7 @@ const main = () => {
  *
  * 版本号用构建时间，每次 pnpm pwa 都会变，触发 SW 更新。
  */
-const CACHE = 'chat-demo-${version}-${Date.now().toString(36)}'
+const CACHE = 'deep-chat-${version}-${Date.now().toString(36)}'
 
 const PRECACHE = ${JSON.stringify(precache, null, 2)}
 

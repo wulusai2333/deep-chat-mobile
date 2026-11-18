@@ -80,11 +80,11 @@ const checkBuild = () => {
   const js = readFileSync(mainJs, 'utf8')
 
   // 壳的四个能力都要真的打进 bundle
-  record(js.includes('__CHAT_DEMO_KEYSTORE__'), '加密 Key 桥已打包')
-  record(js.includes('__CHAT_DEMO_IMPORT__'), '合并导入桥已打包')
+  record(js.includes('__DEEP_CHAT_KEYSTORE__'), '加密 Key 桥已打包')
+  record(js.includes('__DEEP_CHAT_IMPORT__'), '合并导入桥已打包')
   record(js.includes('shell-mic-blocked'), '麦克风引导已打包')
   record(js.includes('hasPendingFile'), '外部打开 ZIP 处理已打包')
-  record(js.includes('__CHAT_DEMO_ONBOARDING__'), '首启引导已打包')
+  record(js.includes('__DEEP_CHAT_ONBOARDING__'), '首启引导已打包')
 
   // 侧边栏显示的应用名来自 i18n 的 appName，被打进 main bundle。
   // 查不到字符串说明 rebrand 补丁失效（会退回「API 使用 demo」）。
@@ -127,6 +127,14 @@ const checkApk = async () => {
   const apk = apks.find((name) => name.includes('release')) ?? apks[0]
   const apkPath = join(paths.outApk, apk)
   info(`检查对象：${apk}（${(statSync(apkPath).size / 1024 / 1024).toFixed(2)} MB）`)
+
+  // 产物文件名要和产品名一致：包里叫 Deep Chat，文件却叫 chat-demo-*.apk
+  // 会让人分不清哪个是交付物（也确实同时存在过两个名字的包，误装过）。
+  record(
+    !apk.startsWith('chat-demo-'),
+    '产物文件名不再用 chat-demo 前缀',
+    apk
+  )
 
   const sdk = process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT
   if (!sdk) {
@@ -253,7 +261,7 @@ const checkSecurity = () => {
   const settingsPath = join(paths.web, 'src', 'services', 'settings.ts')
   if (existsSync(settingsPath)) {
     const text = readFileSync(settingsPath, 'utf8')
-    const hasKeystoreBranch = text.includes('__CHAT_DEMO_KEYSTORE__')
+    const hasKeystoreBranch = text.includes('__DEEP_CHAT_KEYSTORE__')
     record(hasKeystoreBranch, 'settings.ts 有加密存储分支')
     // 在 keystore 分支里应当 early return，之后才是 write(KEYS.apiKey)
     const branchIndex = text.indexOf('if (keystore)')

@@ -218,7 +218,7 @@ public class FileOpenPlugin extends Plugin {
         } catch (Exception ignored) {
             // 查询失败就用兜底名，不影响导入
         }
-        return "chat-demo-import.zip";
+        return "deep-chat-import.zip";
     }
 
     /** 供 MainActivity 判断某个 Intent 是不是「打开一个 ZIP」 */

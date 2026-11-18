@@ -16,7 +16,7 @@
  * `window.Capacitor.nativePromise` 原生桥，然后检查：
  *
  *   1. 页面真的渲染出内容（不是白屏）
- *   2. 桥返回空 Key 时，引导层出现且 `__CHAT_DEMO_ONBOARDING__` 为 true
+ *   2. 桥返回空 Key 时，引导层出现且 `__DEEP_CHAT_ONBOARDING__` 为 true
  *   3. 桥返回有效 Key 时，引导层不出现、Key 进入 `window.__RUNTIME_KEY__`
  *   4. 已引导过（localStorage 有标记）时不再打扰
  *   5. 纯浏览器（无桥）下不报错、不显示引导 —— PWA 兜底路径
@@ -104,9 +104,9 @@ const PROBE = `(() => {
     framePaddingTop: frame ? getComputedStyle(frame).paddingTop : null,
     // 全局状态
     runtimeKeySet: Boolean(window.__RUNTIME_KEY__),
-    onboardingFlag: window.__CHAT_DEMO_ONBOARDING__,
-    hasImportBridge: Boolean(window.__CHAT_DEMO_IMPORT__),
-    hasKeyStore: Boolean(window.__CHAT_DEMO_KEYSTORE__),
+    onboardingFlag: window.__DEEP_CHAT_ONBOARDING__,
+    hasImportBridge: Boolean(window.__DEEP_CHAT_IMPORT__),
+    hasKeyStore: Boolean(window.__DEEP_CHAT_KEYSTORE__),
     bridgeCalls: window.__BRIDGE_CALLS__ || [],
     // 安全区变量
     insetTop: read('--shell-inset-top'),
@@ -196,7 +196,7 @@ const main = async () => {
     'A4 引导层是欢迎首屏且带产品名',
     fresh.onboardingTitle
   )
-  check(fresh.onboardingFlag === true, 'A5 __CHAT_DEMO_ONBOARDING__ 置为 true（让位给引导层）')
+  check(fresh.onboardingFlag === true, 'A5 __DEEP_CHAT_ONBOARDING__ 置为 true（让位给引导层）')
   check(fresh.runtimeKeySet === false, 'A6 没有 Key 时不注入 __RUNTIME_KEY__')
   check(fresh.hasImportBridge === true, 'A7 导入桥已安装')
   check(fresh.hasKeyStore === true, 'A8 Key 存储桥已安装')
@@ -226,7 +226,7 @@ const main = async () => {
       ERROR_TRAP,
       makeBridge({ apiKey: null }),
       // 模拟上次启动点了「先跳过」
-      `window.localStorage.setItem('chat-demo:onboarded', '1')`,
+      `window.localStorage.setItem('deep-chat:onboarded', '1')`,
     ],
   })
   check(skipped.rootChildren > 0, 'C1 页面渲染出内容')
