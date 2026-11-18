@@ -40,3 +40,6 @@ Thumbs.db
 
 # 交付用 APK 副本（二进制，由 pnpm android:release 生成，不进版本库）
 deliver/
+
+# 用户自己放的 UI 参考截图，按目录名要求不进版本库
+UI参考图 不允许添加到git/

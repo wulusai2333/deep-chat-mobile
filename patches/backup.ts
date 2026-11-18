@@ -11,10 +11,20 @@
  * 对外的 `exportHistory()` 仍是 `enqueueBackup(exportHistorySnapshot)`，行为完全不变。
  * 合并流程调 snapshot 版，安全地待在同一个队列任务里。
  *
- * 【为什么把 importHistory 改成委派给 window.__CHAT_DEMO_IMPORT__】
+ * 【为什么把 importHistory 改成委派给 window.__DEEP_CHAT_IMPORT__】
  * 这是唯一能同时满足「不改上游 UI 组件」和「换掉导入语义」的位置：
  * SettingsDialog 只调 `importHistory(file)` 拿一个数字，内部换成合并还是覆盖它不关心。
  * 桥不存在时（理论上不会，因为桥在浏览器里也装）走原来的覆盖实现，属于安全回退。
+ *
+ * 【真实的坑：这里写了 snapshot，import-bridge 却用了会入队的版本】
+ * 上面第 2 条规则是给**调用方**读的，而真正的调用方是 web-patches/import-bridge.ts
+ * 里的 `backupBeforeImport()`。它一度调用了入队的 `exportHistory()`，于是：
+ *   importHistory → enqueueBackup(A) → A 里调 exportHistory() → enqueueBackup(B)
+ *   → B 要排在 A 后面，A 却在等 B ⇒ 队列永不前进。
+ * 真机现象：点「导入」后一直转圈，一条会话都进不去；而 test:import 全绿，
+ * 因为那些场景直接调 mergeImport()，isNativeShell() 为 false，备份整段被跳过。
+ * 现在 import-bridge 改用 `exportHistorySnapshot()`，并由 test:import 场景11
+ * 伪造 window.Capacitor 走真实路径来守住（回归时会明确超时）。
  */
 
 // ── 改动 1：导出实现体抽出，不入队 ──────────────────────────────────────────

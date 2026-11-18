@@ -35,7 +35,7 @@
  * 继续读只会在半截数据上做决策。
  */
 
-import { exportHistory } from '../services/chat/backup.js'
+import { exportHistorySnapshot } from '../services/chat/backup.js'
 import * as db from '../services/chat/db.js'
 import { BackupError } from '../services/chat/history/errors.js'
 import { checkArchiveFormat } from '../services/chat/history/importArchive.js'
@@ -175,7 +175,13 @@ const imageType = (bytes: Uint8Array): string => {
  * 备份失败时**直接抛错中止导入**：宁可不让用户导，也不能在没有退路的情况下动数据。
  */
 const backupBeforeImport = async (): Promise<string> => {
-  const { blob } = await exportHistory()
+  // mobile-shell: backup no enqueue —— 这里必须用不入队的快照版本。
+  // mergeImport 是被上游 importHistory() 调进来的，而后者已经坐在 enqueueBackup
+  // 的队列里；再调同样会入队的 exportHistory()，就变成「队列里的任务 A 等在它之后
+  // 才可能执行的任务 B」，队列永远不前进。
+  // 真机表现：导入卡死、一条会话都进不去。浏览器里测不出来 —— isNativeShell() 为
+  // false 时这段备份整段跳过，正好绕开了 bug。
+  const { blob } = await exportHistorySnapshot()
   const fileName = `deep-chat-backup-${backupStamp(new Date())}.zip`
   const { path } = await callNative<{ path: string }>(PLUGIN_FILES, 'saveBackup', {
     fileName,

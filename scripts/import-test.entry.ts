@@ -8,13 +8,13 @@
  */
 
 import * as db from '../web/src/services/chat/db.js'
-import { exportHistorySnapshot } from '../web/src/services/chat/backup.js'
+import { exportHistorySnapshot, importHistory } from '../web/src/services/chat/backup.js'
 import { replaceHistory } from '../web/src/services/chat/store.js'
 import { writeArchive } from '../web/src/services/chat/history/zipWriter.js'
 // 必须从 web/src/shell/ 引入，而不是 web-patches/：
 // 注入后的文件在那里，导入路径（../services/...）才成立。
 // 这样测的就是**实际进 APK 的那份代码**，而不是一份结构不同的副本。
-import { mergeImport } from '../web/src/shell/import-bridge.js'
+import { installImportBridge, mergeImport } from '../web/src/shell/import-bridge.js'
 
 const log = (message) => console.log(`[test] ${message}`)
 
@@ -308,6 +308,63 @@ const run = async () => {
   check(r10.failed === 0, '场景10 自己的导出能重新导入', r10)
   const countAfter = (await db.loadSessionSummaries()).length
   check(countBefore === countAfter, '场景10 往返后会话数不变', { countBefore, countAfter })
+
+  // ══ 场景 11：真机路径 —— importHistory() 内部入队 + 备份，不得死锁 ══
+  //
+  // 【为什么必须单独测这一条】
+  // 前面 10 个场景都直接调 mergeImport()，此时 isNativeShell() 为 false，
+  // 「导入前自动备份」整段被跳过。而真机上走的是上游的 importHistory()，
+  // 它自己用 enqueueBackup() 排队；备份若调用同样会入队的 exportHistory()，
+  // 就是「队列里的任务等一个排在它后面的任务」，队列永不前进。
+  // 这个 bug 实际发生过：真机导入卡死、0 条会话进库，而 31 项测试全绿。
+  // 所以这里伪造 window.Capacitor 让 isNativeShell() 为 true，走真实路径。
+  const nativeCalls = []
+  ;(globalThis as any).Capacitor = {
+    nativePromise: async (plugin: string, method: string) => {
+      nativeCalls.push(`${plugin}.${method}`)
+      return method === 'saveBackup' ? { path: '/fake/deep-chat-backup.zip' } : {}
+    },
+  }
+  // 桥在模块加载时按 isNativeShell() 决定装不装；此刻补 Capacitor 已经晚了，
+  // 必须再装一次，否则 importHistory 会回退到上游覆盖逻辑，测不到合并路径。
+  installImportBridge()
+
+  // 用一个**合规**的归档（空归档会被 checkArchiveFormat 正确拒绝，
+  // 那样测到的就是「格式校验通过了吗」而不是死锁，方向全错）
+  const zipForNative = await makeArchive([
+    sessionFile({
+      id: 'sess-native',
+      title: '真机路径会话',
+      updatedAt: T4,
+      messages: [msg(1, null, 'USER', '真机导入', T4)],
+    }),
+  ])
+  // 给 promise 套超时：死锁和「慢」在结果上都是「没结束」，必须能区分开
+  const withTimeout = async (promise: Promise<unknown>, ms: number): Promise<unknown> => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise((resolve) => {
+      timer = setTimeout(() => resolve('__TIMEOUT__'), ms)
+    })
+    try {
+      return await Promise.race([promise, timeout])
+    } finally {
+      if (timer) {
+        clearTimeout(timer)
+      }
+    }
+  }
+  const nativeOutcome = await withTimeout(importHistory(zipForNative), 20000)
+  check(
+    nativeOutcome !== '__TIMEOUT__',
+    '场景11 真机路径 importHistory 不死锁（20s 内返回）',
+    nativeOutcome === '__TIMEOUT__' ? '超时，疑似 enqueueBackup 自死锁' : 'ok'
+  )
+  check(
+    nativeCalls.includes('DeepChatFiles.saveBackup'),
+    '场景11 导入前确实调用了原生备份',
+    nativeCalls
+  )
+  delete (globalThis as any).Capacitor
 
   // ══ 汇总 ══
   const failed = results.filter((r) => !r.ok)
