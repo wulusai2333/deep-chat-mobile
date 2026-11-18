@@ -115,12 +115,12 @@ const checkBuild = () => {
 const checkApk = async () => {
   step('B. APK 硬指标')
   if (!existsSync(paths.outApk)) {
-    warn('还没有构建过 APK，跳过（先运行 pnpm android:debug）')
+    record(false, 'dist-apk/ 存在（先运行 pnpm android:release）', paths.outApk)
     return
   }
   const apks = readdirSync(paths.outApk).filter((name) => name.endsWith('.apk'))
   if (apks.length === 0) {
-    warn('dist-apk/ 里没有 APK，跳过')
+    record(false, 'dist-apk/ 里有 APK（先运行 pnpm android:release）', paths.outApk)
     return
   }
   // 优先检查 release（对外产物），其次 debug
@@ -137,13 +137,20 @@ const checkApk = async () => {
   )
 
   const sdk = process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT
+  // 这里必须是**失败**而不是跳过。曾经是 warn + return，于是没设 ANDROID_HOME 时
+  // 16 项 APK 检查（含「版本名与 package.json 一致」）全部静默不执行，
+  // 脚本照样打印「全部通过」—— 过期 APK 因此能一路绿灯。跳过=假装验过。
   if (!sdk) {
-    warn('ANDROID_HOME 未设置，跳过 APK 内部检查')
+    record(
+      false,
+      'ANDROID_HOME 已设置（否则 APK 检查会被整段跳过）',
+      '未设置 ANDROID_HOME / ANDROID_SDK_ROOT'
+    )
     return
   }
   const buildTools = join(sdk, 'build-tools')
   if (!existsSync(buildTools)) {
-    warn('找不到 build-tools，跳过 APK 内部检查')
+    record(false, '找到 build-tools（否则 APK 检查会被跳过）', buildTools)
     return
   }
   const version = readdirSync(buildTools).sort().reverse()[0]
