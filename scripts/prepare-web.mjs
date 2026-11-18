@@ -870,6 +870,12 @@ const readDirectoryCached = (file: File): Promise<{ entries: Entry[]; offset: nu
   clearSearch: '清除',
   localAccountName: '本地用户',
   theme: '主题',
+  changeAvatar: '更换头像',
+  resetAvatar: '恢复默认头像',
+  avatarUpdated: '头像已更新',
+  avatarReset: '已恢复默认头像',
+  avatarReadFailed: '图片读取失败，请换一张',
+  // ── mobile-ui: mobile strings end ──
 `
 
   const EN_STRINGS = `  // ── mobile-ui: mobile strings en —— 见 zh.ts 同名补丁
@@ -890,24 +896,33 @@ const readDirectoryCached = (file: File): Promise<{ entries: Entry[]; offset: nu
   clearSearch: 'Clear',
   localAccountName: 'Local user',
   theme: 'Theme',
+  changeAvatar: 'Change avatar',
+  resetAvatar: 'Reset avatar',
+  avatarUpdated: 'Avatar updated',
+  avatarReset: 'Avatar reset to default',
+  avatarReadFailed: 'Could not read the image, try another',
+  // ── mobile-ui: mobile strings end ──
 `
 
-  replaceOnce(
+  // i18n 的移动端文案增长很快（换头像、录音、搜索…），必须用 upsertBlock：
+  // replaceOnce 见到旧标记就跳过，已打过补丁的 web/ 会永远停在第一版文案上。
+  const MOBILE_STRINGS_END = '  // ── mobile-ui: mobile strings end ──'
+  upsertBlock(
     'src/i18n/zh.ts',
-    'mobile-ui: mobile strings zh',
-    `  settingsLocaleEnUS: 'English',
-} as const`,
-    `${ZH_STRINGS}  settingsLocaleEnUS: 'English',
-} as const`
+    '  // ── mobile-ui: mobile strings zh',
+    MOBILE_STRINGS_END,
+    "  settingsLocaleEnUS: 'English',",
+    ZH_STRINGS,
+    'before'
   )
 
-  replaceOnce(
+  upsertBlock(
     'src/i18n/en.ts',
-    'mobile-ui: mobile strings en',
-    `  settingsLocaleEnUS: 'English',
-} satisfies Record<keyof typeof zh, string>`,
-    `${EN_STRINGS}  settingsLocaleEnUS: 'English',
-} satisfies Record<keyof typeof zh, string>`
+    '  // ── mobile-ui: mobile strings en',
+    MOBILE_STRINGS_END,
+    "  settingsLocaleEnUS: 'English',",
+    EN_STRINGS,
+    'before'
   )
 
   // ── 补丁 21：引入移动端全局样式（tokens / 主题 / 列表留白）────────────────

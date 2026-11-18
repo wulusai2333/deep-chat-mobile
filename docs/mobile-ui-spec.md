@@ -223,9 +223,12 @@ i18n 文案、`main.tsx` 引入 mobile.css 这类小改动，继续用 prepare-w
        最多扫 200 条会话 / 最多 50 条结果，可取消）。
      - 搜索态下不显示分组标题，平铺结果。
   5. 底部账户行（固定底、高 64px + 安全区）：
-     - 左：圆形头像 32px（`<MIconUser/>`，灰底 `--m-fill`）
+     - 左：圆形头像 32px（默认 **App 图标**，`<img data-avatar="local">` 圆形裁切；
+       点头像 = 系统选图，压成 256×256 JPEG 存 `localStorage`，可恢复默认）。
+       头像不进导出的历史 ZIP（属于本机外观偏好）。
      - 中：`t('localAccountName')`，16px
-     - 右：`…` 按钮 → `Menu`：`t('settings')`（`openSettings('general')`）、
+     - 右：`…` 按钮 → `Menu`：`t('changeAvatar')` / 已自选时多一项 `t('resetAvatar')`、
+       `t('settings')`（`openSettings('general')`）、
        `t('theme')`（在 浅色/深色/跟随系统 间切换，复用 `setThemePreference`）
      - 点击账户行本身 = 打开设置。
 
@@ -260,6 +263,11 @@ i18n 文案、`main.tsx` 引入 mobile.css 这类小改动，继续用 prepare-w
 | `clearSearch` | 清除 | Clear |
 | `localAccountName` | 本地用户 | Local user |
 | `theme` | 主题 | Theme |
+| `changeAvatar` | 更换头像 | Change avatar |
+| `resetAvatar` | 恢复默认头像 | Reset avatar |
+| `avatarUpdated` | 头像已更新 | Avatar updated |
+| `avatarReset` | 已恢复默认头像 | Avatar reset to default |
+| `avatarReadFailed` | 图片读取失败，请换一张 | Could not read the image, try another |
 
 已有键直接用：`thinkingSwitch`、`search`、`send`、`chatInputStopButtonTooltip`、`voiceInput`、
 `close`、`more`、`newChat`、`expandSiderbarButton`、`ttsPlay`、`ttsStop`、`settings`、

@@ -128,7 +128,7 @@ pnpm accept           # 9. 用无头浏览器验收打包进 APK 的那份产物
 pnpm test:import      # 10. 合并导入的端到端测试（真实 IndexedDB）
 ```
 
-产物：`dist-apk/deep-chat-0.2.1-x64-release.apk`（约 5.8 MB）
+产物：`dist-apk/deep-chat-0.2.2-x64-release.apk`（约 5.8 MB）
 
 调试包把第 7 步换成 `pnpm android:debug`，产物名带 `-debug`。**debug 与 release 使用同一把
 发布密钥**（见 `android/app/build.gradle`），所以两者可以互相覆盖安装，不会出现
@@ -189,7 +189,7 @@ APK 走 Android 兼容层。详细步骤见 [install-harmony.md](./install-harmo
 
 ```powershell
 & "$env:ANDROID_HOME\platform-tools\adb.exe" devices
-& "$env:ANDROID_HOME\platform-tools\adb.exe" install -r dist-apk\deep-chat-0.2.1-x64-release.apk
+& "$env:ANDROID_HOME\platform-tools\adb.exe" install -r dist-apk\deep-chat-0.2.2-x64-release.apk
 ```
 
 `-r` 是覆盖安装、保留数据。**签名必须一致** —— 换签名只能先卸载，本地数据会全丢。
@@ -265,7 +265,7 @@ DN:      CN=Deep Chat, OU=Mobile, O=DeepChat, C=CN
 
 ```powershell
 & "$env:ANDROID_HOME\build-tools\36.0.0\apksigner.bat" verify --print-certs `
-  dist-apk\deep-chat-0.2.1-x64-release.apk
+  dist-apk\deep-chat-0.2.2-x64-release.apk
 ```
 
 `build-apk.mjs` 在 release 结束时自动跑这一步，并打印指纹。
@@ -532,6 +532,7 @@ pnpm test:import   # 合并导入端到端（真实 IndexedDB）
 - [ ] 麦克风进入「按住说话」：按住说一句、松手出文字；短按提示「说话时间太短」；键盘键切回文字
 - [ ] 顶栏喇叭朗读当前会话最后一条回答，再点停止
 - [ ] 抽屉：主界面右移露出汉堡；搜索标题与正文都能命中；长按会话行可重命名/删除；底部账户行可进设置/切主题
+- [ ] 账户行头像：默认显示 App 图标；点头像从相册选一张 → 立即变成新头像；重启应用后仍是新头像；菜单「恢复默认头像」能回到 App 图标
 - [ ] 移动端会话页：标题居中、消息列表与输入框吸底，键盘弹出不遮挡输入框
 - [ ] 深浅色跟随系统切换
 - [ ] 键盘弹出不遮挡输入框

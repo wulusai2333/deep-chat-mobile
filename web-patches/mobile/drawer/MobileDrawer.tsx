@@ -26,6 +26,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ChangeEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from 'react'
@@ -44,7 +45,10 @@ import { showToast } from '../../components/base/toastState.js'
 import { openSettings } from '../../components/settings/settingsDialogState.js'
 import { closeMobileSider, useMobileSider } from '../../components/sider/mobileSiderState.js'
 import { useTranslate, type TranslationKey } from '../../i18n/index.js'
-import { MIconClose, MIconEllipsis, MIconSearch, MIconUser } from '../common/icons.js'
+import { APP_ICON_DATA_URL } from '../common/app-icon-data.js'
+import { fileToAvatarDataUrl } from '../common/avatar-image.js'
+import { resetLocalAvatar, setLocalAvatar, useLocalAvatar } from '../common/localAvatar.js'
+import { MIconClose, MIconEllipsis, MIconSearch } from '../common/icons.js'
 import { loadSession } from '../../services/chat/db.js'
 import { groupSessions } from '../../services/chat/sessionGroups.js'
 import {
@@ -281,6 +285,11 @@ export const MobileDrawer = () => {
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<SessionSummary | null>(null)
   const [deletePending, setDeletePending] = useState(false)
+  // 本地账户头像：默认 App 图标，用户可换成自己的图（存 localStorage，见 localAvatar.ts）
+  const [avatarPending, setAvatarPending] = useState(false)
+  const avatarInputRef = useRef<HTMLInputElement>(null)
+  const avatarUrl = useLocalAvatar()
+  const avatarCustom = avatarUrl !== APP_ICON_DATA_URL
 
   // 抽屉关闭后清掉搜索态：下次打开回到会话列表（官方 App 的行为），
   // 避免「点了搜索结果 → 再打开抽屉还是搜索结果」。
@@ -401,7 +410,52 @@ export const MobileDrawer = () => {
     closeMobileSider()
   }
 
+  /** 打开系统文件选择器换头像；处理完统一压成 256×256 JPEG 再存 */
+  const pickAvatar = () => {
+    if (!avatarPending) {
+      avatarInputRef.current?.click()
+    }
+  }
+
+  const onAvatarChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    // 先清空 value：同一个文件连选两次也要能触发 change
+    event.target.value = ''
+    if (!file) {
+      return
+    }
+    setAvatarPending(true)
+    try {
+      const dataUrl = await fileToAvatarDataUrl(file)
+      setLocalAvatar(dataUrl)
+      showToast(t('avatarUpdated'))
+    } catch {
+      showToast(t('avatarReadFailed'))
+    } finally {
+      setAvatarPending(false)
+    }
+  }
+
+  const restoreAvatar = () => {
+    resetLocalAvatar()
+    showToast(t('avatarReset'))
+  }
+
+  const resetAvatarOption: MenuOption = {
+    key: 'reset-avatar',
+    label: t('resetAvatar'),
+    icon: <IconTrashOutline16 />,
+    onSelect: restoreAvatar,
+  }
+
   const accountOptions: MenuOption[] = [
+    {
+      key: 'change-avatar',
+      label: t('changeAvatar'),
+      icon: <IconEditOutline16 />,
+      onSelect: pickAvatar,
+    },
+    ...(avatarCustom ? [resetAvatarOption] : []),
     {
       key: 'settings',
       label: t('settings'),
@@ -489,8 +543,38 @@ export const MobileDrawer = () => {
           tabIndex={-1}
           onClick={() => openSettings('general')}
         >
-          <span className={styles.avatar}>
-            <MIconUser size={18} />
+          <input
+            ref={avatarInputRef}
+            className={styles.avatarInput}
+            type="file"
+            accept="image/*"
+            onChange={onAvatarChange}
+          />
+          <span
+            className={clsx(styles.avatar, avatarPending && styles.avatarBusy)}
+            role="button"
+            tabIndex={0}
+            aria-label={t('changeAvatar')}
+            onClick={(event) => {
+              // 账户行本身点击 = 打开设置；点头像要换头像，不能顺带弹设置
+              event.stopPropagation()
+              pickAvatar()
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault()
+                event.stopPropagation()
+                pickAvatar()
+              }
+            }}
+          >
+            <img
+              className={styles.avatarImage}
+              src={avatarUrl}
+              alt=""
+              draggable={false}
+              data-avatar="local"
+            />
           </span>
           <span className={styles.accountName}>{t('localAccountName')}</span>
           {/* Menu 的浮层用 portal 挂到 body，但 React 事件仍沿组件树冒泡：

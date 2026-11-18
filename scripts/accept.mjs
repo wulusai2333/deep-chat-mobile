@@ -376,6 +376,29 @@ const main = async () => {
             (item) => item.getAttribute('aria-label') === '打开边栏'
           )
         )
+
+        // 本地账户头像：默认 App 图标；把「用户自选 → 恢复默认」的读写链路各跑一遍
+        const avatarImg = document.querySelector('img[data-avatar="local"]')
+        window.__MOBILE_PROBE__.avatar = {
+          found: Boolean(avatarImg),
+          srcPrefix: avatarImg ? avatarImg.src.slice(0, 24) : null,
+          srcLength: avatarImg ? avatarImg.src.length : 0,
+          srcTail: avatarImg ? avatarImg.src.slice(-24) : null,
+        }
+        const customAvatar =
+          'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+        window.localStorage.setItem('deep-chat:local-avatar', customAvatar)
+        window.dispatchEvent(new Event('deep-chat:local-avatar-change'))
+        await new Promise((r) => setTimeout(r, 200))
+        window.__MOBILE_PROBE__.avatarCustomSrc = (document.querySelector('img[data-avatar="local"]') || {}).src || null
+        window.localStorage.removeItem('deep-chat:local-avatar')
+        window.dispatchEvent(new Event('deep-chat:local-avatar-change'))
+        await new Promise((r) => setTimeout(r, 200))
+        const resetImg = document.querySelector('img[data-avatar="local"]')
+        window.__MOBILE_PROBE__.avatarReset = {
+          srcLength: resetImg ? resetImg.src.length : 0,
+          srcTail: resetImg ? resetImg.src.slice(-24) : null,
+        }
       })()`)
     },
     probe: MOBILE_PROBE,
@@ -408,6 +431,30 @@ const main = async () => {
       drawerText.includes('本地用户'),
     'F14 抽屉有搜索框与底部账户行',
     mobile.inputPlaceholders.join(' | ')
+  )
+
+  // 头像：默认必须是内置 App 图标（JPEG data URL，长度远大于 1×1 测试图）；
+  // 自选后要立即生效，恢复默认要回到同一张图。
+  const avatar = mobile.probe.avatar || {}
+  check(
+    avatar.found === true &&
+      typeof avatar.srcPrefix === 'string' &&
+      avatar.srcPrefix.startsWith('data:image/jpeg;base64,') &&
+      avatar.srcLength > 2000,
+    'F16 账户行默认头像用内置 App 图标',
+    avatar
+  )
+  check(
+    typeof mobile.probe.avatarCustomSrc === 'string' &&
+      mobile.probe.avatarCustomSrc.startsWith('data:image/png;base64,') &&
+      mobile.probe.avatarCustomSrc.length < 500,
+    'F17 用户自选头像可写入并立即生效'
+  )
+  const avatarReset = mobile.probe.avatarReset || {}
+  check(
+    avatarReset.srcLength === avatar.srcLength && avatarReset.srcTail === avatar.srcTail,
+    'F18 清掉自选头像后恢复默认 App 图标',
+    avatarReset
   )
 
   // ══ 场景 G：朗读按钮的播放/停止开关态（F15）══

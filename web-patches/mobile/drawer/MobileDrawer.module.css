@@ -244,11 +244,40 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  box-sizing: border-box;
   width: 32px;
   height: 32px;
+  overflow: hidden;
   border-radius: 50%;
   background-color: var(--m-fill);
   color: var(--m-text-secondary);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.avatar:active {
+  opacity: 0.85;
+}
+
+/* 换头像处理中（解码 + 压缩）给一点反馈，避免连点 */
+.avatarBusy {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* 头像画满 32px 圆形容器，cover 裁成正方形 */
+.avatarImage {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+/* 真正调起系统文件选择器的 input：不占布局，只用它的 click() */
+.avatarInput {
+  display: none;
 }
 
 .accountName {

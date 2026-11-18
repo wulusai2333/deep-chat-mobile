@@ -492,6 +492,48 @@ const main = () => {
   writePng(join(webIcons, 'icon-maskable-512.png'), maskable, 512)
   count += 3
 
+  // ── 7. 本地用户默认头像（与 App 图标同一张源图）──
+  // 抽屉底部账户行默认显示 App 图标；用户可换成自己的图片（见 localAvatar.ts）。
+  // 内联成 data URL 的原因：上游 rspack 配置没有图片资源规则，加一个 loader 只为了
+  // 一张 32px 的头像不值得；而且内联后不需要 cap:sync 额外拷资源。
+  const avatarSize = 192
+  const avatarRgba = resize(src, avatarSize, avatarSize)
+  const avatarJpeg = jpeg.encode(
+    {
+      data: Buffer.from(avatarRgba.buffer, avatarRgba.byteOffset, avatarRgba.byteLength),
+      width: avatarSize,
+      height: avatarSize,
+    },
+    82
+  ).data
+  const avatarDataUrl = `data:image/jpeg;base64,${avatarJpeg.toString('base64')}`
+  const avatarFile = join(paths.root, 'web-patches', 'mobile', 'common', 'app-icon-data.ts')
+  const avatarSource = `/**
+ * 本地用户默认头像 —— 自动生成，勿手改。
+ *
+ * 源图：assets/app-icon.jpeg（与 APK 图标同一张），${avatarSize}×${avatarSize} JPEG，内联为 data URL。
+ * 由 scripts/make-icons.mjs 生成：换图标后跑 pnpm icons 重新生成。
+ *
+ * 为什么内联：上游 rspack 没有图片资源规则；头像只有一处 32px 用途，
+ * 内联可以避免为一张图新增 loader 或 cap:sync 额外资源。
+ * 用户自选头像存在 localStorage（见 localAvatar.ts），不写入本文件。
+ */
+export const APP_ICON_DATA_URL =
+  '${avatarDataUrl}'
+`
+  let previousAvatar = ''
+  try {
+    previousAvatar = readFileSync(avatarFile, 'utf8')
+  } catch {
+    // 首次生成
+  }
+  if (previousAvatar !== avatarSource) {
+    writeFileSync(avatarFile, avatarSource)
+    info(`默认头像数据已更新：${avatarFile}`)
+  } else {
+    info('默认头像数据未变化')
+  }
+
   info(`共生成 ${count} 个资源`)
   info(`Android: ${join(res, 'mipmap-*')}`)
   info(`Web/PWA: ${webIcons}`)
