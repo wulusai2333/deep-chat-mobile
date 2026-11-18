@@ -19,54 +19,17 @@
 import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fail, info, paths, run, step, warn } from './lib/env.mjs'
+import { openBrowser, startStaticServer } from './lib/cdp.mjs'
 
 const KEEP = process.argv.includes('--keep')
-
-/** cmd.exe 会把含空格的路径截断，必须加引号 */
-const quotePath = (value) => (/[\s"]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value)
-
-/** 轮询一个返回 JSON 的端点，直到成功或超时 */
-const pollJson = async (url, timeoutMs) => {
-  const deadline = Date.now() + timeoutMs
-  let lastError
-  while (Date.now() < deadline) {
-    try {
-      const response = await fetch(url)
-      if (response.ok) {
-        return await response.json()
-      }
-      lastError = new Error(`HTTP ${response.status}`)
-    } catch (error) {
-      lastError = error
-    }
-    await new Promise((resolve) => setTimeout(resolve, 250))
-  }
-  throw new Error(`等待 ${url} 超时：${lastError?.message}`)
-}
-
-/** 找一个可用的 Chromium 内核浏览器 */
-const findBrowser = () => {
-  const candidates =
-    process.platform === 'win32'
-      ? [
-          'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-          'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
-          'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-          'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
-        ]
-      : ['/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser']
-  return candidates.find((path) => existsSync(path))
-}
 
 /** 用上游的 rspack 把测试入口打成 IIFE（配置见 import-test.rspack.config.mjs） */
 const buildBundle = async () => {
   // 每一轮都换一个新的临时目录：Chrome 的 profile 里有些文件在进程退出后
-  // 仍被系统短暂占用（CrashpadMetrics-active.pma 之类），删不掉会直接抛 EBUSY。
-  // 与其跟它较劲，不如不复用目录。
+  // 仍被系统短暂占用，删不掉会抛 EBUSY。与其跟它较劲，不如不复用目录。
   const stamp = `${Date.now()}-${process.pid}`
   const workDir = join(paths.root, '.tmp', `import-test-${stamp}`)
   mkdirSync(workDir, { recursive: true })
-  process.env.CHATDEMO_TEST_DIR = workDir
 
   const rspackCli = join(paths.web, 'node_modules', '@rspack', 'cli', 'bin', 'rspack.js')
   const configPath = join(paths.scripts, 'import-test.rspack.config.mjs')
@@ -112,106 +75,32 @@ const writeHtml = (workDir) => {
 }
 
 /**
- * 跑测试：通过 CDP 驱动无头浏览器，等 window.__TEST_RESULT__ 出现后取结果。
+ * 跑测试：驱动无头浏览器，等 window.__TEST_RESULT__ 出现后取结果。
  *
- * 【为什么不用 --dump-dom + --virtual-time-budget】
- * 那个组合会在页面 load 之后（或虚拟时间预算耗尽时）立刻快照 DOM。
- * 但本测试的结果来自 IndexedDB 的异步回调 —— 虚拟时间不会等它们，
- * 于是每次都拿到空的 <pre>，表现为「测试没有产生任何输出」，
- * 而实际测试可能正在正常跑（只是还没跑完）。属实是最难排查的那类假失败。
+ * 【为什么用 CDP 而不是 --dump-dom】
+ * `chrome --headless --dump-dom --virtual-time-budget=N` 会在页面 load 之后
+ * （或虚拟时间预算耗尽时）立刻快照 DOM。但本测试的结果来自 IndexedDB 的异步回调 ——
+ * 虚拟时间不会等它们，于是每次都拿到空的 <pre>，表现为「测试没有产生任何输出」。
+ * 这种假失败会把排查方向完全带偏（让人去怀疑 bundle 没加载、loader 写错、
+ * IndexedDB 被禁用……实际上只是快照太早）。
  *
- * CDP 的 Runtime.evaluate + awaitPromise 能真正等到测试自己 resolve。
- * Node 22 自带 WebSocket，所以不需要 ws 之类的依赖。
+ * 浏览器的启动与销毁、进程清理都交给 lib/cdp.mjs —— 那里按 profile 路径
+ * 杀掉整组进程，否则 Chrome 残留会一直持有临时目录的文件锁。
  */
-const runHeadless = async (browser, port, workDir) => {
-  const { createServer } = await import('node:http')
-  const { spawn } = await import('node:child_process')
-
-  // 1. 找一个空闲端口给 CDP
-  const probe = createServer()
-  await new Promise((resolve) => probe.listen(0, '127.0.0.1', resolve))
-  const cdpPort = probe.address().port
-  await new Promise((resolve) => probe.close(resolve))
-
-  // 2. 启动浏览器
-  const child = spawn(
-    quotePath(browser),
-    [
-      '--headless=new',
-      '--disable-gpu',
-      '--no-sandbox',
-      '--disable-dev-shm-usage',
-      '--no-first-run',
-      '--no-default-browser-check',
-      `--remote-debugging-port=${cdpPort}`,
-      // 用一个临时 profile，避免与用户正在用的 Chrome 抢锁
-      `--user-data-dir=${join(workDir, 'profile')}`,
-      'about:blank',
-    ],
-    { stdio: 'ignore', shell: process.platform === 'win32' }
-  )
-
+const runHeadless = async (baseUrl, workDir) => {
+  const browser = await openBrowser({ workDir })
   try {
-    // 3. 等 CDP 就绪
-    const targets = await pollJson(`http://127.0.0.1:${cdpPort}/json/list`, 15000)
-    const page = targets.find((item) => item.type === 'page')
-    if (!page) {
-      throw new Error('找不到可用的浏览器页目标')
-    }
+    await browser.navigate(`${baseUrl}/index.html`)
 
-    const socket = new WebSocket(page.webSocketDebuggerUrl)
-    await new Promise((resolve, reject) => {
-      socket.onopen = resolve
-      socket.onerror = () => reject(new Error('CDP WebSocket 连接失败'))
-    })
-
-    let nextId = 1
-    const pending = new Map()
-    socket.onmessage = (event) => {
-      const message = JSON.parse(event.data)
-      if (message.id !== undefined && pending.has(message.id)) {
-        const { resolve, reject } = pending.get(message.id)
-        pending.delete(message.id)
-        if (message.error) {
-          reject(new Error(JSON.stringify(message.error)))
-        } else {
-          resolve(message.result)
-        }
-      }
-    }
-    const send = (method, params) =>
-      new Promise((resolve, reject) => {
-        const id = nextId++
-        pending.set(id, { resolve, reject })
-        socket.send(JSON.stringify({ id, method, params }))
-      })
-
-    const evaluate = async (expression) => {
-      const result = await send('Runtime.evaluate', {
-        expression,
-        awaitPromise: true,
-        returnByValue: true,
-      })
-      if (result.exceptionDetails) {
-        throw new Error(result.exceptionDetails.exception?.description ?? '页面内异常')
-      }
-      return result.result.value
-    }
-
-    // 4. 打开测试页
-    await send('Page.enable')
-    await send('Page.navigate', { url: `http://127.0.0.1:${port}/index.html` })
-
-    // 5. 轮询等结果（测试可能要跑十几秒：多个 ZIP 的 deflate/inflate）
+    // 轮询等结果（测试要跑十几秒：多个 ZIP 的 deflate/inflate）
     const deadline = Date.now() + 120000
     let payload = null
     while (Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 400))
-      const state = await evaluate(
+      const state = await browser.evaluate(
         `(() => {
            if (window.__TEST_RESULT__) { return { done: true, value: window.__TEST_RESULT__ } }
-           const logs = window.__LOGS__ || []
-           return { done: false, value: logs.slice(-1)[0] ?? null }
+           return { done: false }
          })()`
       )
       if (state?.done) {
@@ -220,67 +109,35 @@ const runHeadless = async (browser, port, workDir) => {
       }
     }
 
-    // 6. 把日志也取出来（用于失败时定位）
-    const logs = (await evaluate('window.__LOGS__ || []')) ?? []
-    socket.close()
-
+    // 把日志也取出来（用于失败时定位）
+    const logs = (await browser.evaluate('window.__LOGS__ || []')) ?? []
     if (!payload) {
       return { payload: null, logs, reason: '等待 120 秒仍未出现 __TEST_RESULT__' }
     }
     return { payload, logs, reason: null }
   } finally {
-    child.kill()
+    browser.close()
   }
-}
-
-/** 极简静态服务器，只服务一轮测试的临时目录（file:// 下 Chrome 禁用 IndexedDB） */
-const startServer = async (workDir) => {
-  const { createServer } = await import('node:http')
-  const { readFileSync, existsSync } = await import('node:fs')
-  const server = createServer((req, res) => {
-    const name = decodeURIComponent((req.url ?? '/').split('?')[0]).replace(/^\/+/, '') || 'index.html'
-    const file = join(workDir, name)
-    // 防目录穿越
-    if (!file.startsWith(workDir) || !existsSync(file)) {
-      res.writeHead(404)
-      res.end('not found')
-      return
-    }
-    const type = file.endsWith('.js')
-      ? 'text/javascript; charset=utf-8'
-      : file.endsWith('.html')
-        ? 'text/html; charset=utf-8'
-        : 'application/octet-stream'
-    res.writeHead(200, { 'content-type': type })
-    res.end(readFileSync(file))
-  })
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
-  return { server, port: server.address().port }
 }
 
 const main = async () => {
   step('合并导入端到端测试')
 
-  const browser = findBrowser()
-  if (!browser) {
-    warn('没找到 Chrome / Edge，跳过（这个测试需要 Chromium 内核）')
-    return
-  }
-  info(`浏览器：${browser}`)
-
   info('打包测试入口…')
   const { workDir } = await buildBundle()
   writeHtml(workDir)
 
-  const { server, port } = await startServer(workDir)
-  info(`本地服务 http://127.0.0.1:${port}/`)
+  // 必须走 http:// 而不是 file://：Chrome 在 file:// 下禁用 IndexedDB，
+  // 而本测试全程依赖它。（file:// 会得到 SecurityError，看起来像测试逻辑出错。）
+  const server = await startStaticServer(workDir)
+  info(`本地服务 ${server.url}/`)
 
   let outcome
   try {
     info('在无头浏览器中运行…')
-    outcome = await runHeadless(browser, port, workDir)
+    outcome = await runHeadless(server.url, workDir)
   } finally {
-    server.close()
+    await server.close()
   }
 
   const result = outcome.payload

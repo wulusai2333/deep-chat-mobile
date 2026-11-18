@@ -16,7 +16,7 @@
  * 项目要求不给上游引入任何新依赖；Node 22 自带 WebSocket，CDP 手写 60 行就够。
  */
 
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -94,14 +94,47 @@ export const openBrowser = async ({ workDir, initScript }) => {
       `--user-data-dir=${join(workDir, 'profile')}`,
       'about:blank',
     ],
-    { stdio: 'ignore' }
+    // detached 让浏览器自成一个进程组，非 Windows 平台可整组杀（见 cleanup）
+    { stdio: 'ignore', detached: process.platform !== 'win32' }
   )
 
+  /**
+   * 关掉浏览器。
+   *
+   * 【为什么杀了 PID 还是留一堆进程】
+   * Chrome 启动时会「自我交接」：我们 spawn 到的那个进程可能很快退出，
+   * 真正干活的浏览器进程换了 PID（实测父进程变成已回收的僵尸），
+   * 于是 `taskkill /T /F <我们拿到的 pid>` 什么也杀不到，
+   * 而 renderer / gpu / crashpad 继续持有 profile 目录的 LevelDB 锁。
+   *
+   * 【所以按「唯一路径」而不是 PID 来杀】
+   * 每一轮测试都用独一无二的 `--user-data-dir=<workDir>/profile`，
+   * 在命令行里搜这个路径就能精确锁定本次运行派生的全部进程，
+   * 不会误伤用户自己正在用的 Chrome。
+   */
   const cleanup = () => {
+    const profileDir = join(workDir, 'profile')
     try {
-      child.kill()
+      if (process.platform === 'win32') {
+        // 先按 PID 树（正常情况下够用）
+        spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' })
+        // 再按唯一路径兜底（应对自我交接后的新 PID）。
+        // 命令必须写成**单行**：spawnSync 传多行字符串给 powershell -Command 时，
+        // 换行会被当成命令分隔符，管道后半段失配，结果一条也杀不掉。
+        const escaped = profileDir.replace(/'/g, "''")
+        const script =
+          `Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -ErrorAction SilentlyContinue ` +
+          `| Where-Object { $_.CommandLine -like '*${escaped}*' } ` +
+          `| ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }`
+        spawnSync('powershell', ['-NoProfile', '-Command', script], {
+          stdio: 'ignore',
+          windowsHide: true,
+        })
+      } else {
+        process.kill(-child.pid, 'SIGKILL')
+      }
     } catch {
-      // 已经退出
+      // 已经退出，或 PID 已被回收
     }
   }
 
