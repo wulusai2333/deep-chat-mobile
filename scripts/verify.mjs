@@ -138,8 +138,15 @@ const checkApk = async () => {
     record(false, 'dist-apk/ 里有 APK（先运行 pnpm android:release）', paths.outApk)
     return
   }
-  // 优先检查 release（对外产物），其次 debug
-  const apk = apks.find((name) => name.includes('release')) ?? apks[0]
+  // 优先检查「本次版本」的 release（对外产物），其次任意 release，最后 debug。
+  // 为什么要按版本号挑：dist-apk/ 里常留着上一版的 release，readdir 顺序又按文件名，
+  // 只写「第一个含 release 的」会挑中旧包，于是「版本名与 package.json 一致」直接失败
+  //（0.2.7 发布时就踩到过：新包已经构建好了，verify 却在检查 0.2.6）。
+  const version = pkgVersion()
+  const apk =
+    apks.find((name) => name.includes(`-${version}-`) && name.includes('release')) ??
+    apks.find((name) => name.includes('release')) ??
+    apks[0]
   const apkPath = join(paths.outApk, apk)
   info(`检查对象：${apk}（${(statSync(apkPath).size / 1024 / 1024).toFixed(2)} MB）`)
 
@@ -168,8 +175,8 @@ const checkApk = async () => {
     record(false, '找到 build-tools（否则 APK 检查会被跳过）', buildTools)
     return
   }
-  const version = readdirSync(buildTools).sort().reverse()[0]
-  const aapt2 = join(buildTools, version, process.platform === 'win32' ? 'aapt2.exe' : 'aapt2')
+  const buildToolsVersion = readdirSync(buildTools).sort().reverse()[0]
+  const aapt2 = join(buildTools, buildToolsVersion, process.platform === 'win32' ? 'aapt2.exe' : 'aapt2')
 
   let badging = ''
   try {
@@ -277,7 +284,7 @@ const checkApk = async () => {
   // 「已签名」不等于「能覆盖安装」：换了一把 keystore 照样是有效签名，
   // 但老用户会 INSTALL_FAILED_UPDATE_INCOMPATIBLE —— 所以要比对指纹。
   if (apk.includes('release')) {
-    const apksigner = join(buildTools, version, process.platform === 'win32' ? 'apksigner.bat' : 'apksigner')
+    const apksigner = join(buildTools, buildToolsVersion, process.platform === 'win32' ? 'apksigner.bat' : 'apksigner')
     const certFile = join(paths.android, 'release-cert.sha256')
     const expected = existsSync(certFile)
       ? readFileSync(certFile, 'utf8')

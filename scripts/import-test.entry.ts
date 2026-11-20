@@ -11,6 +11,7 @@ import * as db from '../web/src/services/chat/db.js'
 import { exportHistorySnapshot, importHistory } from '../web/src/services/chat/backup.js'
 import { replaceHistory, useChatStore } from '../web/src/services/chat/store.js'
 import { writeArchive } from '../web/src/services/chat/history/zipWriter.js'
+import { readDirectoryCached } from '../web/src/services/chat/history/zipReader.js'
 import { checkArchiveFormat } from '../web/src/services/chat/history/importArchive.js'
 // 必须从 web/src/shell/ 引入，而不是 web-patches/：
 // 注入后的文件在那里，导入路径（../services/...）才成立。
@@ -335,6 +336,32 @@ const run = async () => {
   const countAfter = (await db.loadSessionSummaries()).length
   check(countBefore === countAfter, '场景10 往返后会话数不变', { countBefore, countAfter })
 
+  // 导出体积（0.2.7）：与官方一致 —— `.json` 走 deflate、图片原件 STORE。
+  // 读中央目录直接看 method，体积用 compressedSize/size 对比。
+  const exportedDirectory = await readDirectoryCached(roundTripFile)
+  const jsonEntries = exportedDirectory.entries.filter((entry) => entry.path.endsWith('.json'))
+  const imageEntries = exportedDirectory.entries.filter((entry) => entry.path.includes('_files/'))
+  const rawTotal = exportedDirectory.entries.reduce((sum, entry) => sum + entry.size, 0)
+  const compressedTotal = exportedDirectory.entries.reduce(
+    (sum, entry) => sum + entry.compressedSize,
+    0
+  )
+  check(
+    jsonEntries.length > 0 && jsonEntries.every((entry) => entry.method === 8),
+    '场景10c 导出 ZIP 的 JSON 条目走 deflate（method 8）',
+    { entries: jsonEntries.length }
+  )
+  check(
+    imageEntries.length > 0 && imageEntries.every((entry) => entry.method === 0),
+    '场景10c 导出 ZIP 的图片条目原样 STORE（method 0）',
+    { entries: imageEntries.length }
+  )
+  check(
+    compressedTotal < rawTotal * 0.8,
+    '场景10c 导出 ZIP 明显小于原始数据（压缩生效）',
+    { rawTotal, compressedTotal }
+  )
+
   // 导出进度（0.2.4）：壳层据此画进度条。回调在每条会话被消费完后触发一次，
   // 必须单调递增，且末值等于开始时的列表条数（漏掉最后一条会让进度条停在 x/y）。
   const exportProgress: number[] = []
@@ -516,18 +543,25 @@ const run = async () => {
   // 「原生逐块 base64 → JS 拼 Blob」出来的：这条路径不测，等于没测用户真正的入口。
   // 这里用内存里的 ZIP 做原生桩，走真实的 consumePendingFile()。
   const chunkBody = 1600 * 1024
-  const chunkZip = await makeArchive([
-    sessionFile({
-      id: 'sess-chunked',
-      title: '分块读取会话',
-      updatedAt: T4,
-      messages: [
-        // 1.6 MB 正文：STORE（不压缩）ZIP 超过 1 MB 分块上限，会分成多块读，
-        // 才能真正验证「逐块拼 Blob」而不是碰巧一块读完。
-        msg(1, null, 'USER', 'a'.repeat(chunkBody), T4),
-      ],
-    }),
-  ])
+  // 0.2.7 起导出/夹具的 JSON 会 deflate，纯文本正文会被压到很小，所以再塞一个
+  // 不可压的随机附件（图片走 STORE），确保 ZIP 超过 1 MB 分块上限、真的分多块读。
+  const noise = new Uint8Array(2 * 1024 * 1024)
+  let seed = 0x12345678
+  for (let index = 0; index < noise.length; index++) {
+    seed = (seed * 1664525 + 1013904223) >>> 0
+    noise[index] = seed >>> 24
+  }
+  const chunkZip = await makeArchive(
+    [
+      sessionFile({
+        id: 'sess-chunked',
+        title: '分块读取会话',
+        updatedAt: T4,
+        messages: [msg(1, null, 'USER', 'a'.repeat(chunkBody), T4)],
+      }),
+    ],
+    new Map([['sess-chunked', new Map<string, Uint8Array>([['noise.bin', noise]])]])
+  )
   const chunkZipBytes = new Uint8Array(await chunkZip.arrayBuffer())
   const chunkStub = installNativeStub(chunkZipBytes)
   installImportBridge()

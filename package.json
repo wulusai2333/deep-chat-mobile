@@ -1,6 +1,6 @@
 {
   "name": "deep-chat-mobile",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "private": true,
   "type": "module",
   "description": "Deep Chat 手机端（Capacitor 壳）：把上游 chat-demo 静态前端封装为可在 HarmonyOS 4.3 侧载安装的 APK。",

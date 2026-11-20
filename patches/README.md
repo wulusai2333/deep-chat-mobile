@@ -7,7 +7,7 @@
   `scripts/verify.mjs` 的 D 组用 `mobile-shell:` / `mobile-ui:` 标记逐个守住，谁改回去自检立刻失败
 - **整文件 fork**：组件的整文件重写放 `web-patches/mobile/overrides/`，manifest 记录上游 `sha256`
   基线，上游一变就让 `prepare` 失败（详见 [`../docs/mobile-ui-spec.md`](../docs/mobile-ui-spec.md) §1）。
-  0.2.5 起 `src/services/chat/history/zipReader.ts` 也走 fork（原因见下）
+  0.2.5 起 `src/services/chat/history/zipReader.ts` 也走 fork；0.2.7 起 `zipWriter.ts` 同样（原因见下）
 
 ## 为什么要有这个目录
 
@@ -67,6 +67,17 @@
 > `export-bridge.ts`（导出编排与失败重试）、`export-ui.ts`（进度 / 成功路径 / 失败原因）。
 > 0.2.5 起 `native-backup.ts` 的分块上限从 256 KB 提到 1 MB，并且让出主线程改用
 > `MessageChannel`（后台时 `setTimeout` 会被 WebView 钳到 1 秒）。
+
+### 导出体积（0.2.7，`zipWriter.ts` 整文件 fork）
+
+| 上游文件 | fork 位置 | 说明文件 | 一句话理由 |
+| --- | --- | --- | --- |
+| `src/services/chat/history/zipWriter.ts` | `web-patches/mobile/overrides/history/zipWriter.ts` | [export-compression.md](export-compression.md) | 上游全 STORE 导出 52.2 MB，官方 App 对 JSON deflate、图片 STORE 只有 31.3 MB |
+
+> 只改「条目类的选择」：`.json` 用 `ZipDeflate(level 6)`，其余（图片等）保持
+> `ZipPassThrough`。会话 JSON 压缩比约 3:1，导出 52.2 → 30.9 MB，耗时 +6.6%。
+> 同时改掉「写完体积校验」的期望值（deflate 后字节数变小，旧的兜底会误判）。
+> 读取侧不需要改：上游读取基于 fflate `unzip`，本来就支持 deflate。
 
 ### 移动端 UI 覆盖层
 

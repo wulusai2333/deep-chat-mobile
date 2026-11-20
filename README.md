@@ -9,8 +9,8 @@
 >
 > **使用前请先读 [免责声明](#免责声明)**。API Key 需要你自己准备，费用与额度由上游服务决定。
 
-当前版本 **0.2.6**。0.2.6 本地验证结果：`pnpm verify` 117/117、`pnpm accept` 50/50、
-`pnpm test:import` 60/60、TypeScript 0 错误（数字随版本变化，以脚本实际输出为准）。
+当前版本 **0.2.7**。0.2.7 本地验证结果：`pnpm verify` 118/118、`pnpm accept` 50/50、
+`pnpm test:import` 63/63、`web/` TypeScript 0 错误（数字随版本变化，以脚本实际输出为准）。
 
 ---
 
@@ -96,7 +96,7 @@ chat-demo，本项目补上了移动端 UI、本地会话存储、API Key 加密
 | 本地会话 | 会话、消息与附件原件都在本机 IndexedDB，无后端，不需要账号 |
 | API Key 加密存储 | `EncryptedSharedPreferences` + Android Keystore（AES-256-GCM），Key 不落 localStorage / IndexedDB 明文；首启引导会先验证 Key 再进主界面 |
 | 历史 ZIP **合并**导入 | 导入前自动备份本机数据（无本机会话 / 本次无新增 / 上次备份后数据未变时自动跳过，确认弹窗里可关闭）；同 id 取 `updatedAt` 较新者、不同 id 追加，**不覆盖本机**；重复导入幂等；支持应用内选择文件与「用其他应用打开 ZIP」两条入口。0.2.6 修复了「归档 > 48 MB 时仍走 content:// 逐块随机读」的问题（用户真机 0.2.5 的 594 条首次导入为 104 s，其中约 75 s 花在读取上；复测数据见 docs/import-performance.md） |
-| 历史导出**落盘 + 进度** | 应用内导出写入 `Documents/DeepChat/deep-chat-export-<时间>.zip`（与导入备份同目录）；导出时显示**阶段进度**，完成后显示完整路径，失败显示原因并可**原地重试**（0.2.4 修复了此前 Android WebView 下导出静默无效的问题） |
+| 历史导出**落盘 + 进度** | 应用内导出写入 `Documents/DeepChat/deep-chat-export-<时间>.zip`（与导入备份同目录）；导出时显示**阶段进度**，完成后显示完整路径，失败显示原因并可**原地重试**（0.2.4 修复了此前 Android WebView 下导出静默无效的问题）。0.2.7 起**导出体积与官方 App 一致**：会话 JSON 用 deflate、图片原样存，同一份 593 条数据 52.2 MB → 30.9 MB（体积与格式见 [patches/export-compression.md](patches/export-compression.md)） |
 | 朗读 | 顶栏喇叭朗读当前会话最后一条有正文的回答；朗读中喇叭**变为品牌蓝**（`aria-pressed`/`data-reading` 可测），再点一次停止 |
 | API 余额 | 抽屉账户行显示当前 API Key 的余额：打开抽屉自动查询（60s 内不重复），点余额可手动刷新；支持多币种，Key 无效 / 网络异常 / 余额不足都有明确提示。余额只存在内存，不落盘、不进导出的历史 ZIP |
 | 深色模式 | 跟随系统 / 手动切换，移动端组件有自己的浅色与深色 token |
@@ -300,7 +300,8 @@ git 跟踪、git 历史里也没有（公开仓库的前提）。
 | 打开后白屏 | 先查系统 WebView / Chrome 是否 ≥ Chromium 105；升级 WebView 后重启应用。自编译包白屏还要确认 `cap:sync` 后重新打了 APK |
 | 鸿蒙 NEXT 装不上 | 系统没有 Android 兼容层，只能换用 PWA 兜底（功能降级，见 `docs/build.md`） |
 | 横屏/平板显示的是桌面布局 | 设计如此：视口 ≥ 768px 走桌面布局。手机上建议竖屏使用 |
-| 导入很慢 / 中途像卡死 | 0.2.5 起账本命中会直接跳过、备份在数据未变时也会跳过；0.2.6 修复了 > 48 MB 归档仍逐块随机读的问题（用户真机 594 条首次导入 104 s，其中约 75 s 是读取）。超大归档/低端机仍会慢；导入期间请保持前台、别杀应用，并留足存储 |
+| 导入很慢 / 中途像卡死 | 0.2.5 起账本命中会直接跳过、备份在数据未变时也会跳过；0.2.6 修复了 > 48 MB 归档仍逐块随机读的问题（用户真机 594 条首次导入 104 s，其中约 75 s 是读取）。超大归档/低端机仍会慢（真机 0.2.6 首次导入 14.3 s、增量 3.9 s）；导入期间请保持前台、别杀应用，并留足存储 |
+| 导出的 ZIP 比官方的导出大 | 0.2.6 及以前把所有条目原样存（不压缩），同一份 593 条数据是 52.2 MB，官方是 31.3 MB。0.2.7 起会话 JSON 用 deflate、图片原样存，导出 30.9 MB，与官方同级（见 [patches/export-compression.md](patches/export-compression.md)） |
 | 朗读没声音 | 检查媒体音量与静音；TTS 需要网络与 API 额度；部分文本服务端无法合成会提示 |
 | 点「+ → 拍照/相册」没反应 | 需要系统里有相机/相册应用，且 WebView 的 file chooser 未被系统或安全软件拦截；可改用「文件」入口 |
 | 提示 Key 无效 / 余额不足 | 到上游控制台检查 Key、余额与限流；本项目只负责调用 |
@@ -423,7 +424,7 @@ deep-chat-mobile/
 - [docs/import-performance.md](docs/import-performance.md) —— 历史 ZIP 导入的性能与闪退根因、分块协议、内存上界
 - [docs/install-harmony.md](docs/install-harmony.md) —— 鸿蒙 4.3 侧载安装、权限、卸载、导入
 - [CHANGELOG.md](CHANGELOG.md) —— 版本记录
-- [patches/README.md](patches/README.md) —— 25 处上游改动总览（每处的理由）
+- [patches/README.md](patches/README.md) —— 27 处锚点补丁 + 2 个整文件 fork 的总览（每处的理由）
 - [native/secure-storage/README.md](native/secure-storage/README.md) —— Key 加密存储的威胁模型与 API
 - [native/mic-permission/README.md](native/mic-permission/README.md) —— 麦克风权限状态插件
 - [native/file-open/README.md](native/file-open/README.md) —— 备份写出与「用其他应用打开 ZIP」

@@ -6,6 +6,11 @@
       "to": "src/services/chat/history/zipReader.ts",
       "from": "overrides/history/zipReader.ts",
       "upstreamSha256": "a182ad211da485b4f046aa0188470c47c17ecf70388c3b090bac142f6bdd8c44"
+    },
+    {
+      "to": "src/services/chat/history/zipWriter.ts",
+      "from": "overrides/history/zipWriter.ts",
+      "upstreamSha256": "8090239ca11125b6d3a2947f3b461e4ba9301146b1fc3a5428b3d3d8a4aeeae0"
     }
   ]
 }
