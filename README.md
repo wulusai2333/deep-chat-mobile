@@ -10,7 +10,7 @@
 > **使用前请先读 [免责声明](#免责声明)**。API Key 需要你自己准备，费用与额度由上游服务决定。
 
 当前版本 **0.2.4**。0.2.4 本地验证结果：`pnpm verify` 111/111、`pnpm accept` 50/50、
-`pnpm test:import` 45/45、TypeScript 0 错误（数字随版本变化，以脚本实际输出为准）。
+`pnpm test:import` 46/46、TypeScript 0 错误（数字随版本变化，以脚本实际输出为准）。
 
 ---
 
@@ -165,7 +165,7 @@ pnpm android:release  # 编译签名的 release APK → dist-apk/
 pnpm android:debug    # debug 包（与 release 同一把发布密钥，可互相覆盖）
 pnpm verify           # 静态硬指标：构建产物 / APK / 安全 / 补丁完整性 / 私钥未入库
 pnpm accept           # 无头浏览器验收「打包进 APK 的那份产物」
-pnpm test:import      # 合并导入端到端（真实 IndexedDB，14 场景 45 断言）
+pnpm test:import      # 合并导入端到端（真实 IndexedDB，14 场景 46 断言）
 pnpm ui:preview       # 构建 + 截图（移动端 5 屏 + 桌面回归图）
 pnpm icons            # 从 assets/app-icon.jpeg 重新生成全套图标（含默认头像）
 pnpm pwa              # 组装 pwa-dist/（PWA 兜底）

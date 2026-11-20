@@ -338,6 +338,17 @@ const run = async () => {
     { last: exportProgress[exportProgress.length - 1], exportTotal, calls: exportProgress.length }
   )
 
+  // 跨端兼容（0.2.4）：手机导出的 ZIP 必须能被**桌面端 chat-demo 的导入实现**读取。
+  // 此刻还没有 window.__DEEP_CHAT_IMPORT__（场景 11 才装），importHistory 会走上游
+  // importArchive —— 也就是桌面版「设置 → 数据 → 导入」用的同一份代码。
+  // 只用自己的合并导入往返，无法证明「手机导出 → 桌面」这条迁移路径。
+  const desktopImported = await importHistory(roundTripFile)
+  check(
+    desktopImported === countBefore,
+    '场景10b 手机导出可被桌面端覆盖式导入读取',
+    { desktopImported, countBefore }
+  )
+
   // ══ 场景 11：真机路径 —— importHistory() 内部入队 + 备份，不得死锁 ══
   //
   // 【为什么必须单独测这一条】
