@@ -73,9 +73,12 @@ const injectShell = () => {
     'bridge.ts',
     'storage-utils.ts',
     'ui.ts',
+    'native-backup.ts',
     'keystore-bridge.ts',
     'import-bridge.ts',
     'import-ui.ts',
+    'export-bridge.ts',
+    'export-ui.ts',
     'mic-guide.ts',
     'onboarding.ts',
     'shell.ts',
@@ -202,6 +205,52 @@ const upsertBlock = (file, startMarker, endMarker, anchor, snippet, position = '
       : text.replace(anchor, `${snippet}${anchor}`)
   writeFileSync(full, restore(next))
   info(`${file}: 已插入补丁块`)
+}
+
+/**
+ * 「整段替换 + 可升级」：首次按 `from → to` 精确替换；之后若首尾标记已存在，
+ * 就整段换成最新的 `to`。
+ *
+ * 【为什么需要它】
+ * 有些补丁是**替换**上游的一整段实现（而不是在旁边插入）。既要求「已打过旧补丁的
+ * web/ 能升级」，又要求「全新 clone 的上游文件能一次替换成功」：
+ *   • 只用 replaceOnce：旧块会被标记挡住，永远停在旧实现；
+ *   • 只用 upsertBlock：全新 clone 时只会插入，不会删掉上游原实现 → 重复定义。
+ * 所以这里组合两者：有标记 → 更新块；没标记 → 做一次精确替换。
+ */
+const upsertReplace = (file, startMarker, endMarker, from, to) => {
+  const full = join(paths.web, file)
+  mustExist(full, '上游文件缺失，可能改了目录结构')
+  const { text, restore } = readSource(full)
+  const start = text.indexOf(startMarker)
+  if (start >= 0) {
+    const end = text.indexOf(endMarker, start)
+    if (end < 0) {
+      fail(`${file}: 补丁块缺少结束标记，无法更新`, `期望结束标记：${endMarker}`)
+    }
+    const current = text.slice(start, end + endMarker.length)
+    const next = to.trimEnd()
+    if (current === next) {
+      info(`${file}: 补丁块已是最新，跳过`)
+      return
+    }
+    writeFileSync(
+      full,
+      restore(text.slice(0, start) + next + text.slice(end + endMarker.length))
+    )
+    info(`${file}: 已更新补丁块`)
+    return
+  }
+  if (!text.includes(from)) {
+    fail(
+      `${file}: 找不到待替换原文，无法打补丁`,
+      ['上游实现已变更，需要人工确认后更新 scripts/prepare-web.mjs。', `期望原文：${from.slice(0, 120)}`].join(
+        '\n'
+      )
+    )
+  }
+  writeFileSync(full, restore(text.replace(from, to)))
+  info(`${file}: 已替换`)
 }
 
 /**
@@ -619,9 +668,15 @@ import { guideBlockedMic } from '../../shell/mic-guide.js'`
   // 关键点：合并流程内部要调导出做备份，若调对外的 exportHistory() 会
   // 「在队列任务里 await 队列任务」而死锁。所以把实现体抽成不入队的快照版。
   // 详见 patches/backup.ts。
-  replaceOnce(
+  // 用 upsertReplace 而不是 replaceOnce：补丁块自身要在 0.2.4 升级（加进度回调），
+  // 已打过旧补丁的 web/ 不能因为「标记已存在」就停在旧实现上；
+  // 同时全新 clone 的 web/ 里仍然要**替换**掉上游实现，不能只插入（会重复定义）。
+  const EXPORT_SNAPSHOT_START = '// ── mobile-shell: export snapshot ──────────────────────────────────────────'
+  const EXPORT_SNAPSHOT_END = '// ── mobile-shell: export snapshot end ─────────────────────────────────────'
+  upsertReplace(
     'src/services/chat/backup.ts',
-    'mobile-shell: export snapshot',
+    EXPORT_SNAPSHOT_START,
+    EXPORT_SNAPSHOT_END,
     `/** 导出为历史会话导出格式的 ZIP，可再次导入。 */
 export const exportHistory = (): Promise<{ name: string; blob: Blob }> =>
   enqueueBackup(async () => {
@@ -648,9 +703,19 @@ export const exportHistory = (): Promise<{ name: string; blob: Blob }> =>
 // 实现体抽成不入队的函数：合并导入在队列任务内部需要一个「当前数据快照」，
 // 若调对外的 exportHistory()（自身也 enqueue）会自己等自己而死锁。
 // 对外行为完全不变。详见 patches/backup.ts。
-export const exportHistorySnapshot = async (): Promise<{ name: string; blob: Blob }> => {
+//
+// 【可选进度回调】用户手动导出在手机上一次要几十秒；壳层要画进度条，
+// 就必须知道「已经处理到第几条会话」。total 取开始时的列表快照条数，
+// 每消费完一条回调一次；每 8 条让出一帧 —— 连续 await 的微任务会把 rAF
+// 饿死，进度条整段不动（导入路径踩过同样的坑，见 docs/import-performance.md）。
+export type ExportProgress = (done: number, total: number) => void
+export const exportHistorySnapshot = async (
+  onProgress?: ExportProgress
+): Promise<{ name: string; blob: Blob }> => {
   // 列表和已加载内容保留导出开始时的快照；未打开的会话逐条读取，不填满详情缓存。
   const { sessions, sessionCache } = useChatStore.getState()
+  const total = sessions.length
+  let done = 0
   async function* readSessions(): AsyncGenerator<Session> {
     for (const summary of sessions) {
       const session = Object.hasOwn(sessionCache, summary.id)
@@ -661,6 +726,12 @@ export const exportHistorySnapshot = async (): Promise<{ name: string; blob: Blo
       }
       // 详情读取期间可能重命名，归档标题与开始时的列表保持一致。
       yield { ...session, ...summary }
+      // yield 之后才计数：此刻 exportArchive 已经处理完这条（含图片原件）
+      done += 1
+      if (done % 8 === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      }
+      onProgress?.(done, total)
     }
   }
   const { exportArchive } = await import('./history/exportArchive.js')
@@ -670,8 +741,10 @@ export const exportHistorySnapshot = async (): Promise<{ name: string; blob: Blo
 }
 
 /** 导出为历史会话导出格式的 ZIP，可再次导入。 */
-export const exportHistory = (): Promise<{ name: string; blob: Blob }> =>
-  enqueueBackup(exportHistorySnapshot)
+export const exportHistory = (
+  onProgress?: ExportProgress
+): Promise<{ name: string; blob: Blob }> =>
+  enqueueBackup(() => exportHistorySnapshot(onProgress))
 // ── mobile-shell: export snapshot end ─────────────────────────────────────`
   )
 
@@ -882,6 +955,7 @@ const readDirectoryCached = (file: File): Promise<{ entries: Entry[]; offset: nu
   balanceNetworkError: '网络异常',
   balanceFetchFailed: '获取失败',
   balanceInsufficient: '余额不足',
+  historyExportSaved: '已保存到 {path}',
   // ── mobile-ui: mobile strings end ──
 `
 
@@ -915,6 +989,7 @@ const readDirectoryCached = (file: File): Promise<{ entries: Entry[]; offset: nu
   balanceNetworkError: 'Network error',
   balanceFetchFailed: 'Failed to load',
   balanceInsufficient: 'Insufficient balance',
+  historyExportSaved: 'Saved to {path}',
   // ── mobile-ui: mobile strings end ──
 `
 
@@ -948,6 +1023,52 @@ const readDirectoryCached = (file: File): Promise<{ entries: Entry[]; offset: nu
     `import './app/global.css'
 // mobile-ui: mobile css —— 移动端官方 App 风格的 tokens 与全局修正（web-patches/mobile/common/mobile.css）
 import './mobile/common/mobile.css'`
+  )
+
+  // ── 补丁 22：原生壳的「导出所有历史对话」写 Documents，并显示进度 ────────────
+  // 【为什么必须改】Capacitor 8 的 Android WebView 没有注册 DownloadListener：
+  // 上游 `<a download href="blob:…">` 的下载在原生壳里是**静默 no-op** ——
+  // 既不落盘、也不报错，用户点了「下载」完全不知道发生了什么（真实反馈）。
+  // 现在改成与「导入前自动备份」同一套分块原生协议：
+  //   Blob → 256 KB 分块 → beginBackup/appendBackupChunk/finishBackup → Documents/DeepChat
+  // 并由壳层自绘进度 / 成功路径 / 失败重试浮层（web-patches/export-ui.ts）。
+  // 浏览器里 isNativeShell() 为 false，原样走上游的 blob 下载 —— 桌面端零变化。
+  replaceOnce(
+    'src/components/settings/SettingsDialog.tsx',
+    'mobile-shell: device export import',
+    "import { closeSettings, useSettingsDialog, type SettingsSection } from './settingsDialogState.js'",
+    `import { closeSettings, useSettingsDialog, type SettingsSection } from './settingsDialogState.js'
+// mobile-shell: device export import —— 原生壳的导出必须写 Documents，不能靠 <a download>
+import { isNativeShell } from '../../shell/bridge.js'
+import { exportHistoryToDevice } from '../../shell/export-bridge.js'`
+  )
+
+  replaceOnce(
+    'src/components/settings/SettingsDialog.tsx',
+    'mobile-shell: device export body',
+    `      const { name, blob } = await exportHistory()
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = name
+      link.click()
+      setTimeout(() => URL.revokeObjectURL(url), 10_000)`,
+    `      // mobile-shell: device export body —— 原生壳走分块原生上传写 Documents，
+      // 并弹进度/结果浮层；浏览器保持上游的 blob 下载（行为完全不变）。
+      if (isNativeShell()) {
+        const path = await exportHistoryToDevice()
+        if (path) {
+          setStatus({ key: 'historyExportSaved', params: { path } })
+        }
+        return
+      }
+      const { name, blob } = await exportHistory()
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = name
+      link.click()
+      setTimeout(() => URL.revokeObjectURL(url), 10_000)`
   )
 }
 

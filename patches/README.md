@@ -3,8 +3,8 @@
 这里是**给人看的文档**，不是构建输入。真正的补丁逻辑在 `scripts/prepare-web.mjs`：
 
 - **注入**：`web-patches/*.ts` → `web/src/shell/`，`web-patches/mobile/` → `web/src/mobile/`
-- **锚点补丁**：对上游文件做插入 / 精确替换，共 11 个上游文件、25 处；
-  `scripts/verify.mjs` 的 D 组用 20 个 `mobile-shell:` / `mobile-ui:` 标记守住这一点，
+- **锚点补丁**：对上游文件做插入 / 精确替换，共 12 个上游文件、27 处；
+  `scripts/verify.mjs` 的 D 组用 22 个 `mobile-shell:` / `mobile-ui:` 标记守住这一点，
   谁把补丁改回去，自检立刻失败
 - **整文件 fork**：移动端组件放 `web-patches/mobile/overrides/`，manifest 记录上游 `sha256` 基线，
   上游一变就让 `prepare` 失败（详见 [`../docs/mobile-ui-spec.md`](../docs/mobile-ui-spec.md) §1）
@@ -55,7 +55,17 @@
 | 23 | `src/i18n/en.ts` | `mobile strings en` | 英文对应文案 |
 | 24 | `src/main.tsx` | `mobile css` | 在 `global.css` 之后引入移动端 token / 样式 |
 
-新增文件（不进上游）见 `web-patches/`：壳层 10 个注入到 `web/src/shell/`，移动端覆盖层
+### 导出落盘（0.2.4）
+
+| # | 上游文件 | 标记 | 说明文件 | 一句话理由 |
+| --- | --- | --- | --- | --- |
+| 25 | `src/components/settings/SettingsDialog.tsx` | `device export import` | [export.ts](export.ts) | 引入「是否原生壳」与「原生导出」两个入口 |
+| 26 | `src/components/settings/SettingsDialog.tsx` | `device export body` | [export.ts](export.ts) | WebView 没有 DownloadListener，`<a download>` 静默无效：改走分块原生写 Documents + 进度/结果浮层 |
+
+> 该补丁新增三个壳层文件：`native-backup.ts`（分块保存，导入前备份也复用它）、
+> `export-bridge.ts`（导出编排与失败重试）、`export-ui.ts`（进度 / 成功路径 / 失败原因）。
+
+新增文件（不进上游）见 `web-patches/`：壳层 13 个注入到 `web/src/shell/`，移动端覆盖层
 注入到 `web/src/mobile/`。桌面端分支保持上游原样。
 
 ## 允许改什么、不许改什么
@@ -65,6 +75,7 @@
 - 安全区 CSS（`safe-area.css`）与 viewport meta
 - API Key 的存储与注入
 - 历史 ZIP 导入 / 合并 / 导入性能与内存
+- 历史导出落盘与进度提示（仅原生壳；浏览器保持上游下载）
 - 首次启动引导
 - ES2023 方法替换（内核兼容）
 - 麦克风永久拒绝时的引导

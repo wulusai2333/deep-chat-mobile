@@ -9,7 +9,7 @@
 
 import * as db from '../web/src/services/chat/db.js'
 import { exportHistorySnapshot, importHistory } from '../web/src/services/chat/backup.js'
-import { replaceHistory } from '../web/src/services/chat/store.js'
+import { replaceHistory, useChatStore } from '../web/src/services/chat/store.js'
 import { writeArchive } from '../web/src/services/chat/history/zipWriter.js'
 // 必须从 web/src/shell/ 引入，而不是 web-patches/：
 // 注入后的文件在那里，导入路径（../services/...）才成立。
@@ -319,6 +319,24 @@ const run = async () => {
   check(r10.failed === 0, '场景10 自己的导出能重新导入', r10)
   const countAfter = (await db.loadSessionSummaries()).length
   check(countBefore === countAfter, '场景10 往返后会话数不变', { countBefore, countAfter })
+
+  // 导出进度（0.2.4）：壳层据此画进度条。回调在每条会话被消费完后触发一次，
+  // 必须单调递增，且末值等于开始时的列表条数（漏掉最后一条会让进度条停在 x/y）。
+  const exportProgress: number[] = []
+  await exportHistorySnapshot((done) => exportProgress.push(done))
+  const exportTotal = useChatStore.getState().sessions.length
+  check(
+    exportProgress.length > 0 &&
+      exportProgress.every((value, index) => index === 0 || value >= exportProgress[index - 1]),
+    '场景10 导出进度单调递增',
+    exportProgress.slice(0, 5)
+  )
+  check(
+    exportProgress.length === exportTotal &&
+      exportProgress[exportProgress.length - 1] === exportTotal,
+    '场景10 导出进度条数与末值等于会话数',
+    { last: exportProgress[exportProgress.length - 1], exportTotal, calls: exportProgress.length }
+  )
 
   // ══ 场景 11：真机路径 —— importHistory() 内部入队 + 备份，不得死锁 ══
   //

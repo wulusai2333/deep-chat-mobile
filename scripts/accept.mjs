@@ -78,6 +78,32 @@ const makeBridge = ({ apiKey }) => `
       if (plugin === 'DeepChatFiles' && method === 'hasPendingFile') {
         return Promise.resolve({ pending: false })
       }
+      // 导出落盘：内存里模拟分块上传（0.2.4）。
+      // finishBackup 故意延迟 800ms，让断言有机会看到「进行中」浮层；
+      // window.__SAVE_MODE__ = 'fail' 时让 finish 失败，验证失败 + 重试路径。
+      if (plugin === 'DeepChatFiles' && method === 'beginBackup') {
+        window.__SAVE_FILE_NAME__ = options.fileName
+        window.__SAVE_BYTES__ = 0
+        // 失败重试会再走一次 beginBackup；这个计数跨多次导出累加，F25 据此断言重试真的重传了
+        window.__SAVE_FINISHED__ = window.__SAVE_FINISHED__ || 0
+        return Promise.resolve({ uploadId: 'stub-upload' })
+      }
+      if (plugin === 'DeepChatFiles' && method === 'appendBackupChunk') {
+        window.__SAVE_BYTES__ += Math.floor(((options.data || '').length * 3) / 4)
+        return Promise.resolve({ written: window.__SAVE_BYTES__ })
+      }
+      if (plugin === 'DeepChatFiles' && method === 'finishBackup') {
+        if (window.__SAVE_MODE__ === 'fail') {
+          return Promise.reject(new Error('failed to save backup: no space left on device'))
+        }
+        window.__SAVE_FINISHED__ += 1
+        return new Promise((resolve) => {
+          setTimeout(() => resolve({ path: 'Documents/DeepChat/' + window.__SAVE_FILE_NAME__ }), 800)
+        })
+      }
+      if (plugin === 'DeepChatFiles' && method === 'abortBackup') {
+        return Promise.resolve({ aborted: true })
+      }
       return Promise.reject(new Error('unstubbed native call: ' + plugin + '.' + method))
     },
   }
@@ -536,6 +562,258 @@ const main = async () => {
       (balanceRetry.calls || 0) > (balanceReady.calls || 0),
     'F21 点余额可重试并恢复显示',
     balanceRetry
+  )
+
+  // ══ 场景 F2：原生导出落盘与进度（F22–F25，0.2.4）══
+  // 0.2.3 及以前「导出所有历史对话」走 <a download> + blob：Android WebView 没有
+  // DownloadListener，点击是**静默 no-op**。这个场景验证修复后的完整链路：
+  //   原生分支 → begin/append/finishBackup → 进度浮层 → 成功路径 → 失败 → 重试。
+  // 桥桩在 finishBackup 里延迟 800ms，让「进行中」浮层可稳定观察。
+  info('F2. 原生导出落盘与进度')
+
+  const EXPORT_SEED = `
+  (async () => {
+    const now = Date.now()
+    const session = {
+      id: 'accept-export-session',
+      title: '导出验收',
+      createdAt: now - 60000,
+      updatedAt: now,
+      messages: [
+        { id: 'accept-export-question', role: 'user', content: '导出验收用会话', files: [], createdAt: now - 60000 },
+        {
+          id: 'accept-export-reply',
+          role: 'assistant',
+          createdAt: now - 59000,
+          model: 'deepseek-flash',
+          thinking: false,
+          search: false,
+          prefix: true,
+          status: 'done',
+          blocks: [{ type: 'text', text: '这条会话用于验收导出进度与落盘路径。' }],
+        },
+      ],
+    }
+    const summary = {
+      id: session.id,
+      title: session.title,
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt,
+      fileIds: [],
+    }
+    const db = await new Promise((resolve, reject) => {
+      const request = indexedDB.open('chat-demo', 11)
+      request.onupgradeneeded = () => {
+        const database = request.result
+        for (const name of ['sessions', 'files', 'sessionsStaging', 'filesStaging']) {
+          if (!database.objectStoreNames.contains(name)) {
+            database.createObjectStore(name, { keyPath: 'id' })
+          }
+        }
+        const summaries = database.objectStoreNames.contains('sessionSummaries')
+          ? request.transaction.objectStore('sessionSummaries')
+          : database.createObjectStore('sessionSummaries', { keyPath: 'id' })
+        if (!summaries.indexNames.contains('fileIds')) {
+          summaries.createIndex('fileIds', 'fileIds', { multiEntry: true })
+        }
+      }
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error)
+    })
+    await new Promise((resolve, reject) => {
+      const transaction = db.transaction(['sessions', 'sessionSummaries'], 'readwrite')
+      transaction.objectStore('sessions').put(session)
+      transaction.objectStore('sessionSummaries').put(summary)
+      transaction.oncomplete = resolve
+      transaction.onerror = () => reject(transaction.error)
+      transaction.onabort = () => reject(transaction.error)
+    })
+    db.close()
+    return true
+  })().catch((error) => {
+    window.__EXPORT_SEED_ERROR__ = String((error && error.message) || error)
+    return false
+  })
+  `
+
+  const EXPORT_PROBE = `(() => ({
+    errors: window.__PAGE_ERRORS__ || [],
+    probe: window.__EXPORT_PROBE__ || {},
+    seedError: window.__EXPORT_SEED_ERROR__ || null,
+  }))()`
+
+  const exportRun = await scenario({
+    label: 'mobile-export',
+    scripts: [
+      ERROR_TRAP,
+      makeBridge({ apiKey: 'sk-test-0123456789abcdef0123456789abcdef' }),
+      `window.localStorage.clear()`,
+    ],
+    before: async (browser) => {
+      await browser.setViewport({ width: 393, height: 852, scale: 2, mobile: true })
+      await browser.evaluate(`new Promise((resolve) => setTimeout(resolve, 700))`)
+
+      // 1) 写入一条会话；写成功前 reload 会让 initChat 读不到它
+      const seeded = await browser.evaluate(EXPORT_SEED)
+      if (!seeded) {
+        await browser.evaluate(`window.__EXPORT_PROBE__ = { setupError: 'seed failed' }`)
+        return
+      }
+      await reloadPage(browser)
+      await browser.waitFor(`!!document.querySelector('button[aria-label="打开边栏"]')`, {
+        timeoutMs: 10000,
+        label: '导出场景：首屏就绪',
+      })
+      await browser.evaluate(`(async () => {
+        window.__EXPORT_PROBE__ = {}
+        ;[...document.querySelectorAll('button, [role="button"]')]
+          .find((node) => node.getAttribute('aria-label') === '打开边栏')
+          ?.click()
+        await new Promise((resolve) => setTimeout(resolve, 800))
+      })()`)
+      // 会话列表异步从 IndexedDB 恢复：等抽屉里出现种子会话再继续
+      const sessionReady = await browser
+        .waitFor(`(document.body.innerText || '').includes('导出验收')`, {
+          timeoutMs: 8000,
+          label: '导出场景：会话列表',
+        })
+        .then(() => true)
+        .catch(() => false)
+      if (!sessionReady) {
+        await browser.evaluate(`window.__EXPORT_PROBE__.setupError = 'session missing'`)
+        return
+      }
+
+      // 2) 账户名 → 设置 →「数据管理」→「下载」；失败/重试也走同一个按钮
+      await browser.evaluate(`(async () => {
+        const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+        const byText = (text) =>
+          [...document.querySelectorAll('button, [role="button"], span')].find(
+            (node) => (node.textContent || '').trim() === text
+          )
+        const tapDownload = () => {
+          const node = [...document.querySelectorAll('button')].find(
+            (item) => (item.textContent || '').trim() === '下载'
+          )
+          if (node) node.click()
+          return Boolean(node)
+        }
+
+        // 点账户名（不是余额）—— 账户行的 onClick 打开设置
+        byText('本地用户')?.click()
+        await wait(700)
+        window.__EXPORT_PROBE__.settingsOpen = (document.body.innerText || '').includes('数据管理')
+        byText('数据管理')?.click()
+        await wait(400)
+
+        window.__EXPORT_PROBE__.downloadClicked = tapDownload()
+        await wait(300)
+        window.__EXPORT_PROBE__.progress = (() => {
+          const node = document.querySelector('[data-export-state="progress"]')
+          return node
+            ? {
+                state: node.getAttribute('data-export-state'),
+                percent: Number(node.getAttribute('data-export-percent')),
+                text: node.innerText,
+              }
+            : null
+        })()
+
+        for (let i = 0; i < 40 && !document.querySelector('[data-export-state="success"]'); i += 1) {
+          await wait(100)
+        }
+        window.__EXPORT_PROBE__.success = (() => {
+          const node = document.querySelector('[data-export-state="success"]')
+          return node
+            ? {
+                text: node.innerText,
+                path: node.getAttribute('data-export-path'),
+                fileName: window.__SAVE_FILE_NAME__,
+              }
+            : null
+        })()
+        window.__EXPORT_PROBE__.saveCalls = (window.__BRIDGE_CALLS__ || []).filter((name) =>
+          name.startsWith('DeepChatFiles.')
+        )
+        window.__EXPORT_PROBE__.saveBytes = window.__SAVE_BYTES__ || 0
+        // 关掉成功浮层，回到设置页
+        document.querySelector('[data-export-state="success"] button')?.click()
+        await wait(400)
+
+        // 3) 失败态：让 finishBackup reject
+        window.__SAVE_MODE__ = 'fail'
+        tapDownload()
+        for (let i = 0; i < 40 && !document.querySelector('[data-export-state="error"]'); i += 1) {
+          await wait(100)
+        }
+        window.__EXPORT_PROBE__.failure = (() => {
+          const node = document.querySelector('[data-export-state="error"]')
+          if (!node) return null
+          return {
+            text: node.innerText,
+            hasRetry: [...node.querySelectorAll('button')].some(
+              (item) => (item.textContent || '').trim() === '重试'
+            ),
+            aborted: (window.__BRIDGE_CALLS__ || []).includes('DeepChatFiles.abortBackup'),
+          }
+        })()
+        // 4) 重试成功
+        window.__SAVE_MODE__ = 'ok'
+        ;[...document.querySelectorAll('[data-export-state="error"] button')]
+          .find((item) => (item.textContent || '').trim() === '重试')
+          ?.click()
+        for (let i = 0; i < 60 && !document.querySelector('[data-export-state="success"]'); i += 1) {
+          await wait(100)
+        }
+        window.__EXPORT_PROBE__.retry = (() => {
+          const node = document.querySelector('[data-export-state="success"]')
+          return node
+            ? { path: node.getAttribute('data-export-path'), finishes: window.__SAVE_FINISHED__ || 0 }
+            : null
+        })()
+      })()`)
+    },
+    probe: EXPORT_PROBE,
+  })
+
+  const exportProbe = exportRun.probe || {}
+  const exportProgress = exportProbe.progress || {}
+  check(
+    exportRun.errors.length === 0 &&
+      exportProbe.downloadClicked === true &&
+      exportProgress.state === 'progress' &&
+      Number(exportProgress.percent) >= 60 &&
+      (exportProgress.text || '').includes('导出'),
+    'F22 导出时显示进度浮层',
+    { errors: exportRun.errors, probe: exportProbe }
+  )
+  const exportSuccess = exportProbe.success || {}
+  const exportPath = exportSuccess.path || ''
+  check(
+    /^Documents\/DeepChat\/deep-chat-export-\d{8}-\d{6}\.zip$/.test(exportPath) &&
+      exportPath.endsWith(exportSuccess.fileName || '-') &&
+      /^deep-chat-export-\d{8}-\d{6}\.zip$/.test(exportSuccess.fileName || '') &&
+      (exportProbe.saveBytes || 0) > 0 &&
+      (exportProbe.saveCalls || []).includes('DeepChatFiles.beginBackup') &&
+      (exportProbe.saveCalls || []).includes('DeepChatFiles.appendBackupChunk') &&
+      (exportProbe.saveCalls || []).includes('DeepChatFiles.finishBackup'),
+    'F23 导出成功显示落盘路径并走分块原生协议',
+    { success: exportSuccess, calls: exportProbe.saveCalls, bytes: exportProbe.saveBytes }
+  )
+  const exportFailure = exportProbe.failure || {}
+  check(
+    (exportFailure.text || '').includes('导出失败') &&
+      exportFailure.hasRetry === true &&
+      exportFailure.aborted === true,
+    'F24 导出失败显示原因并可重试',
+    exportFailure
+  )
+  const exportRetry = exportProbe.retry || {}
+  check(
+    /^Documents\/DeepChat\/deep-chat-export-\d{8}-\d{6}\.zip$/.test(exportRetry.path || '') &&
+      (exportRetry.finishes || 0) >= 2,
+    'F25 失败后点重试可重新导出',
+    exportRetry
   )
 
   // ══ 场景 G：朗读按钮的播放/停止开关态（F15）══

@@ -423,7 +423,17 @@ const checkPatches = () => {
   const shellDir = join(paths.web, 'src', 'shell')
   if (existsSync(shellDir)) {
     const files = readdirSync(shellDir)
-    for (const expected of ['shell.ts', 'bridge.ts', 'keystore-bridge.ts', 'import-bridge.ts', 'onboarding.ts', 'safe-area.css']) {
+    for (const expected of [
+      'shell.ts',
+      'bridge.ts',
+      'keystore-bridge.ts',
+      'import-bridge.ts',
+      'native-backup.ts',
+      'export-bridge.ts',
+      'export-ui.ts',
+      'onboarding.ts',
+      'safe-area.css',
+    ]) {
       record(files.includes(expected), `web/src/shell/${expected} 已注入`)
     }
   } else {
@@ -479,6 +489,8 @@ const checkPatches = () => {
     ['src/main.tsx', 'mobile-shell: bootstrap'],
     ['src/main.tsx', 'mobile-shell: await shell'],
     ['src/components/settings/settingsDialogState.ts', 'mobile-shell: onboarding owns key prompt'],
+    ['src/components/settings/SettingsDialog.tsx', 'mobile-shell: device export import'],
+    ['src/components/settings/SettingsDialog.tsx', 'mobile-shell: device export body'],
     ['src/services/settings.ts', 'mobile-shell: secure api key'],
     ['src/services/settings.ts', 'mobile-shell: api key initial'],
     ['src/services/settings.ts', 'mobile-shell: api key setter'],

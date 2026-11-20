@@ -16,6 +16,13 @@
  * SettingsDialog 只调 `importHistory(file)` 拿一个数字，内部换成合并还是覆盖它不关心。
  * 桥不存在时（理论上不会，因为桥在浏览器里也装）走原来的覆盖实现，属于安全回退。
  *
+ * 【导出进度（0.2.4 新增）】
+ * 手机上一次导出可能几十秒，壳层要画进度条就必须知道「处理到第几条会话」。
+ * `exportHistorySnapshot(onProgress?)` 在每条会话被 exportArchive 消费完之后回调
+ * `(done, total)`，并且每 8 条让出一帧 —— 连续 await 的微任务会把 rAF 饿死，
+ * 进度条会整段不动（导入路径踩过同样的坑，见 docs/import-performance.md）。
+ * `exportHistory(onProgress?)` 原样透传；追加参数不改变任何既有调用方行为。
+ *
  * 【真实的坑：这里写了 snapshot，import-bridge 却用了会入队的版本】
  * 上面第 2 条规则是给**调用方**读的，而真正的调用方是 web-patches/import-bridge.ts
  * 里的 `backupBeforeImport()`。它一度调用了入队的 `exportHistory()`，于是：
@@ -27,10 +34,15 @@
  * 伪造 window.Capacitor 走真实路径来守住（回归时会明确超时）。
  */
 
-// ── 改动 1：导出实现体抽出，不入队 ──────────────────────────────────────────
-export const exportHistorySnapshot = async (): Promise<{ name: string; blob: Blob }> => {
+// ── 改动 1：导出实现体抽出，不入队（可选进度回调） ────────────────────────
+export type ExportProgress = (done: number, total: number) => void
+export const exportHistorySnapshot = async (
+  onProgress?: ExportProgress
+): Promise<{ name: string; blob: Blob }> => {
   // 列表和已加载内容保留导出开始时的快照；未打开的会话逐条读取，不填满详情缓存。
   const { sessions, sessionCache } = useChatStore.getState()
+  const total = sessions.length
+  let done = 0
   async function* readSessions(): AsyncGenerator<Session> {
     for (const summary of sessions) {
       const session = Object.hasOwn(sessionCache, summary.id)
@@ -41,6 +53,12 @@ export const exportHistorySnapshot = async (): Promise<{ name: string; blob: Blo
       }
       // 详情读取期间可能重命名，归档标题与开始时的列表保持一致。
       yield { ...session, ...summary }
+      // yield 之后才计数：此刻 exportArchive 已经处理完这条（含图片原件）
+      done += 1
+      if (done % 8 === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      }
+      onProgress?.(done, total)
     }
   }
   const { exportArchive } = await import('./history/exportArchive.js')
@@ -50,8 +68,10 @@ export const exportHistorySnapshot = async (): Promise<{ name: string; blob: Blo
 }
 
 /** 导出为历史会话导出格式的 ZIP，可再次导入。 */
-export const exportHistory = (): Promise<{ name: string; blob: Blob }> =>
-  enqueueBackup(exportHistorySnapshot)
+export const exportHistory = (
+  onProgress?: ExportProgress
+): Promise<{ name: string; blob: Blob }> =>
+  enqueueBackup(() => exportHistorySnapshot(onProgress))
 
 // ── 改动 2：导入委派给合并桥 ────────────────────────────────────────────────
 export const importHistory = (file: File): Promise<number> =>

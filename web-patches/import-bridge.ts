@@ -69,6 +69,11 @@ import {
 import { replaceHistory } from '../services/chat/store.js'
 import type { Session } from '../services/chat/types.js'
 import { PLUGIN_FILES, callNative, isNativeShell } from './bridge.js'
+import {
+  NATIVE_CHUNK_BYTES,
+  saveArchiveToDevice,
+  yieldToPaint,
+} from './native-backup.js'
 import { showImportResult, showImportProgress, type ImportProgress } from './import-ui.js'
 import { readLocalStorage, writeLocalStorage } from './storage-utils.js'
 
@@ -96,13 +101,6 @@ declare global {
 
 const LEDGER_KEY = 'deep-chat:import-ledger'
 
-/**
- * 原生桥单次往返的原始字节上限。
- * 必须与 native/file-open/FileOpenPlugin.java 的 MAX_CHUNK_BYTES 保持一致：
- * 原生对 length > 256 KB 的读请求直接 reject。
- */
-const NATIVE_CHUNK_BYTES = 256 * 1024
-
 /** 暂存会话批量写：每批条数。593 条 → 约 20–30 个事务（旧实现是 593 个）。 */
 const SESSION_BATCH_SIZE = 24
 
@@ -111,19 +109,6 @@ const IMAGE_BATCH_BYTES = 4 * 1024 * 1024
 
 /** 图片批量写：单批条数上限（小图时避免一批塞太多记录）。 */
 const IMAGE_BATCH_COUNT = 16
-
-/**
- * 让出主线程，给浏览器一帧去画进度条。
- *
- * 【为什么每个批次之间必须让】
- * 导入主循环里每一步都是 await，但 IndexedDB 回调与 Promise 微任务之间不保证
- * 浏览器能拿到渲染帧。连续写 593 条会话时进度条可能整段不动 —— 那正是用户
- * 「以为卡死」的来源。setTimeout(0) 会把控制权交回事件循环，rAF 才有机会执行。
- */
-const yieldToPaint = (): Promise<void> =>
-  new Promise((resolve) => {
-    setTimeout(resolve, 0)
-  })
 
 const readLedger = (): Record<string, true> => {
   const raw = readLocalStorage(LEDGER_KEY)
@@ -163,17 +148,6 @@ const fingerprint = (session: Session): string =>
     session.messages[session.messages.length - 1]?.id ?? '-',
     tailSize(session),
   ].join('|')
-
-/** Blob → base64，分块拼接避免 `String.fromCharCode(...bigArray)` 爆栈 */
-const toBase64 = async (blob: Blob): Promise<string> => {
-  const bytes = new Uint8Array(await blob.arrayBuffer())
-  const CHUNK = 0x8000
-  let binary = ''
-  for (let offset = 0; offset < bytes.length; offset += CHUNK) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + CHUNK))
-  }
-  return btoa(binary)
-}
 
 /** 与上游 backup.ts 的 backupFileName 同风格，但精确到秒，避免同一天覆盖 */
 const backupStamp = (date: Date): string => {
@@ -224,6 +198,11 @@ const imageType = (bytes: Uint8Array): string => {
  * WebView 侧要再序列化一遍 JSON，Java 侧要再解码出 52 MB byte[] —— 低端机直接 OOM。
  * 分块后原生先把数据写进应用缓存临时文件，finish 时才流式落到 Documents；
  * 任一步失败都 abort 并删除临时文件，不会留下半截备份。
+ *
+ * 【分块循环为什么在 native-backup.ts】
+ * 用户手动「导出所有历史对话」也要写同一份协议（此前它靠 `<a download>`，
+ * 在 WebView 里是静默无效的）。两个入口共用 `saveArchiveToDevice()`，
+ * 避免 256 KB 分块契约改了一处漏一处。
  */
 const backupBeforeImport = async (report: ProgressReporter): Promise<string> => {
   // mobile-shell: backup no enqueue —— 这里必须用不入队的快照版本。
@@ -234,33 +213,10 @@ const backupBeforeImport = async (report: ProgressReporter): Promise<string> => 
   // false 时这段备份整段跳过，正好绕开了 bug。
   const { blob } = await exportHistorySnapshot()
   const fileName = `deep-chat-backup-${backupStamp(new Date())}.zip`
-  const { uploadId } = await callNative<{ uploadId: string }>(PLUGIN_FILES, 'beginBackup', {
-    fileName,
+  const phase = '正在备份本机现有会话'
+  return saveArchiveToDevice(blob, fileName, (written, total) => {
+    report({ phase, done: written, total })
   })
-  try {
-    const total = blob.size
-    let offset = 0
-    report({ phase: '正在备份本机现有会话', done: 0, total })
-    while (offset < total) {
-      const end = Math.min(offset + NATIVE_CHUNK_BYTES, total)
-      // 每次只把一个 256 KB 切片转 base64：单次桥负载 ≤ 341 KB 字符串，
-      // 而不是整包的 69.6 MB。
-      const data = await toBase64(blob.slice(offset, end))
-      await callNative(PLUGIN_FILES, 'appendBackupChunk', { uploadId, data })
-      offset = end
-      report({ phase: '正在备份本机现有会话', done: offset, total })
-      // 备份 50 MB 也是秒级到分钟级；块间让出主线程，进度条才动得了
-      await yieldToPaint()
-    }
-    const { path } = await callNative<{ path: string }>(PLUGIN_FILES, 'finishBackup', {
-      uploadId,
-    })
-    return path
-  } catch (error) {
-    // 任何一步失败都要 abort：原生删掉缓存里的临时文件，Documents 里不会出现半截备份
-    await callNative(PLUGIN_FILES, 'abortBackup', { uploadId }).catch(() => {})
-    throw error
-  }
 }
 
 /** JSON 解析失败的会话记为单条失败，不整批回滚 */

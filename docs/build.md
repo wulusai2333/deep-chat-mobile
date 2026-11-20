@@ -128,7 +128,7 @@ pnpm accept           # 9. 用无头浏览器验收打包进 APK 的那份产物
 pnpm test:import      # 10. 合并导入的端到端测试（真实 IndexedDB）
 ```
 
-产物：`dist-apk/deep-chat-0.2.3-x64-release.apk`（约 5.8 MB）
+产物：`dist-apk/deep-chat-0.2.4-x64-release.apk`（约 5.8 MB）
 
 调试包把第 7 步换成 `pnpm android:debug`，产物名带 `-debug`。**debug 与 release 使用同一把
 发布密钥**（见 `android/app/build.gradle`），所以两者可以互相覆盖安装，不会出现
@@ -189,7 +189,7 @@ APK 走 Android 兼容层。详细步骤见 [install-harmony.md](./install-harmo
 
 ```powershell
 & "$env:ANDROID_HOME\platform-tools\adb.exe" devices
-& "$env:ANDROID_HOME\platform-tools\adb.exe" install -r dist-apk\deep-chat-0.2.3-x64-release.apk
+& "$env:ANDROID_HOME\platform-tools\adb.exe" install -r dist-apk\deep-chat-0.2.4-x64-release.apk
 ```
 
 `-r` 是覆盖安装、保留数据。**签名必须一致** —— 换签名只能先卸载，本地数据会全丢。
@@ -246,7 +246,7 @@ DN:      CN=Deep Chat, OU=Mobile, O=DeepChat, C=CN
 - **0.2.x → 0.2.y / 0.3.0**：`adb install -r` 或直接点 APK 覆盖安装即可，数据保留。
 - **0.1.x → 0.2.x**：早期发布的包用的是另一把密钥（已丢失，无法恢复），这是唯一一次
   需要卸载重装的跨越；从 0.2.0 起签名固定，以后不会再发生。
-- 需要保留 0.1.x 的会话时：先在旧版里「设置 → 数据 → 导出」，卸载重装后导入。
+- 需要保留 0.1.x 的会话时：先在旧版里「设置 → 数据管理 → 下载」把会话导出成 ZIP，卸载重装后导入。
 
 ### 4.3 公开发布 Release 时的做法
 
@@ -265,7 +265,7 @@ DN:      CN=Deep Chat, OU=Mobile, O=DeepChat, C=CN
 
 ```powershell
 & "$env:ANDROID_HOME\build-tools\36.0.0\apksigner.bat" verify --print-certs `
-  dist-apk\deep-chat-0.2.3-x64-release.apk
+  dist-apk\deep-chat-0.2.4-x64-release.apk
 ```
 
 `build-apk.mjs` 在 release 结束时自动跑这一步，并打印指纹。
@@ -286,7 +286,7 @@ DN:      CN=Deep Chat, OU=Mobile, O=DeepChat, C=CN
 > 导入链路的性能与内存（真实 32 MB 归档、分块原生桥、根因数据）单独记在
 > [`import-performance.md`](./import-performance.md)。
 
-### 5.1 壳层 / 功能补丁（上游 11 个文件，25 处）
+### 5.1 壳层 / 功能补丁（上游 12 个文件，27 处）
 
 | 文件 | 改了什么 | 为什么必须改 |
 | --- | --- | --- |
@@ -297,7 +297,8 @@ DN:      CN=Deep Chat, OU=Mobile, O=DeepChat, C=CN
 | `src/services/chat/history/toLocal.ts` | `toSorted()` → `.slice().sort()` | `toSorted` 是 ES2023，鸿蒙 4.3 的 WebView 内核不支持，会直接崩 |
 | `src/services/chat/store.ts` | `toReversed()` → `.slice().reverse()` | 同上 |
 | `src/services/chat/db.ts` | **新增** 暂存辅助函数（复制现有数据 / 批量写会话 / 定向回填附件 MIME） | 合并导入需要「复制现有数据进暂存」，且不能再用 `getAll` 制造百 MB 级堆峰值 |
-| `src/services/chat/backup.ts` | 拆出 `exportHistorySnapshot()`；导入改走合并桥 | 自动备份需要不经过队列的快照；导入要 merge 而非 replace |
+| `src/services/chat/backup.ts` | 拆出 `exportHistorySnapshot()`（支持进度回调）；导入改走合并桥 | 自动备份需要不经过队列的快照；导出要画进度；导入要 merge 而非 replace |
+| `src/components/settings/SettingsDialog.tsx` | 原生壳的导出改走 `exportHistoryToDevice()`；浏览器保留 blob 下载 | Android WebView 没有 DownloadListener，`<a download>` 是静默 no-op；必须分块写 Documents 并显示进度 |
 | `src/services/chat/history/zipReader.ts` | 中央目录解析结果按 `File` 缓存 | 一次导入原本解析 3 遍中央目录（677 条目 × 3），缓存后 1 遍 |
 | `src/components/chatInput/useVoiceInput.ts` | 录音失败时补一次原生引导 | 区分「永久拒绝」与普通失败，否则用户被卡在一条看不懂的 toast 上 |
 | `src/i18n/zh.ts` `en.ts` | 产品名 + 移动端文案 | 正式客户端不叫 demo；移动端官方文案见 spec §3 |
@@ -458,6 +459,7 @@ SW 需要 **https 或 localhost**。直接双击 `index.html`（`file://`）不�
 | --- | --- | --- |
 | Key 加密存储 | ✅ Keystore | ❌ 退回 localStorage（浏览器沙箱内） |
 | 合并导入 + 自动备份到 Documents | ✅ | ❌ 退回上游的覆盖式导入，无备份 |
+| 导出落盘 + 进度 | ✅ 分块写 `Documents/DeepChat/`，失败可重试 | ⚠️ 退化为浏览器 `<a download>`，没有进度浮层与固定目录 |
 | 外部打开 ZIP（文件管理器） | ✅ | ❌ |
 | 离线启动 | ✅ 资源内置 | ✅ SW 缓存 |
 | 语音输入 / 朗读 | ✅ | ✅（需 https） |
@@ -500,8 +502,9 @@ pnpm test:import   # 合并导入端到端（真实 IndexedDB）
 | D 纯浏览器（无桥） | 正常渲染、零异常、不装壳层专属能力 —— PWA 兜底路径 |
 | E 安全区 | `.frame` 锚点仍在、`--shell-inset-*` 是具体 px 而非 `env()` 原文 |
 | F 移动端 UI | 鲸鱼 logo、汉堡/朗读/新建对话、官方占位符、深度思考/智能搜索药丸、无 caveat、+ 打开附件面板（拍照/相册/文件）、麦克风切「按住说话」、抽屉搜索框与账户行 |
+| F2 原生导出 | 进度浮层可见；成功后显示 `Documents/DeepChat/deep-chat-export-<时间>.zip`；桥调用含 begin/append/finish；失败显示原因且 abort；点重试可重新导出 |
 
-### 9.3 `test:import`：43 条断言 / 10 个场景
+### 9.3 `test:import`：45 条断言 / 14 个场景
 
 | 场景 | 验的东西 |
 | --- | --- |
@@ -513,7 +516,11 @@ pnpm test:import   # 合并导入端到端（真实 IndexedDB）
 | 7 后续导入纯文字 | 既有图片的 MIME 与原件**不被抹掉** |
 | 8 损坏归档 | 抛错且整批回滚，会话数不变 |
 | 9 单条坏数据 | 好的入库、坏的记 failed 并指出是哪条 |
-| 10 导出后回导 | 往返一致 |
+| 10 导出后回导 | 往返一致；导出进度回调单调递增、末值等于会话数 |
+| 11 真机导入路径 | `importHistory()` 内部入队 + 自动备份不死锁；备份走 begin/append/finish 分块协议 |
+| 12 分块读文件 | 外部打开 ZIP 的多块 `readPendingFileChunk` + close 路径完整 |
+| 13 暂存辅助函数 | 游标收集附件 MIME、定向回填不影响其他会话 |
+| 14 备份失败 | 抛错中止导入、调用 abort 清理、正式会话数不变 |
 
 > **为什么场景 4/5/7 最关键**：它们对应「合并而非替换」这条规格。
 > `replaceHistory()` 内部会先 `clearStaging()` 再重建，一旦哪一步写错，
@@ -544,6 +551,7 @@ pnpm test:import   # 合并导入端到端（真实 IndexedDB）
 - [ ] 朗读：点朗读有声音（无声音先查媒体音量与静音开关）
 - [ ] 导入：设置 → 数据 → 导入 ZIP（系统文件选择器），结果页显示新增/更新/跳过/失败
 - [ ] 导入后 `Documents/DeepChat/` 下有 `deep-chat-backup-<时间>.zip`
+- [ ] 导出：设置 → 数据管理 → 下载 → 出现进度浮层；完成后路径指向 `Documents/DeepChat/deep-chat-export-<时间>.zip`；文件管理器里确认文件存在且大小合理；再导入一次该 ZIP 能合并成功
 - [ ] 同一 ZIP 连导 3 次，会话数不变
 - [ ] 在文件管理器里点开 ZIP → 「用其他应用打开」→ Deep Chat，能直接导入
 - [ ] 锁屏 5 分钟回来，应用还在（而不是被系统杀掉）

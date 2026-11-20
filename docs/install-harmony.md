@@ -137,7 +137,7 @@ $env:ANDROID_HOME = 'D:\soft\android-sdk'
 $adb = "$env:ANDROID_HOME\platform-tools\adb.exe"
 
 & $adb devices          # 手机上会弹「允许 USB 调试吗」，勾选「始终允许」
-& $adb install -r "dist-apk\deep-chat-0.2.3-x64-release.apk"
+& $adb install -r "dist-apk\deep-chat-0.2.4-x64-release.apk"
 ```
 
 装完可以直接看日志，排查问题非常有用：
@@ -226,10 +226,17 @@ $adb = "$env:ANDROID_HOME\platform-tools\adb.exe"
 2. **合并**（不是覆盖）：同 id 的会话取 `updatedAt` 更新的那份；id 不同的追加
 3. 结果页显示：**新增 / 更新 / 跳过 / 失败** 四个数字 + 备份路径
 
-### 7.5 备份文件在哪
+### 7.5 备份与导出文件在哪
+
+应用会往同一个目录写两类 ZIP：
+
+| 来源 | 文件名 | 什么时候产生 |
+| --- | --- | --- |
+| 应用内导出 | `deep-chat-export-<日期>-<时间>.zip` | `设置 → 数据管理 → 下载`，手动导出全部会话 |
+| 导入前自动备份 | `deep-chat-backup-<日期>-<时间>.zip` | 每次合并导入前自动生成 |
 
 ```
-文件管理 → 文档 → DeepChat → deep-chat-backup-<日期>-<时间>.zip
+文件管理 → 文档 → DeepChat → 上面两类 ZIP
 ```
 
 - **Android 10（API 29）及以上**：通过 MediaStore 写入，路径显示为 `Documents/DeepChat/`
@@ -237,6 +244,9 @@ $adb = "$env:ANDROID_HOME\platform-tools\adb.exe"
   `Android/data/com.deepchat.app/files/Documents/DeepChat/`
   这个目录在文件管理器里可能看不见，需要用 adb 或第三方文件管理器访问。
   （鸿蒙 4.3 对应 API 31，走的是前者。）
+- 应用内导出的浮层会直接显示完整落盘路径；失败时会说明原因，可以原地重试。
+  > 0.2.3 及以前，应用内「导出」在 Android 上**不会写文件**（WebView 不支持
+  > `<a download>`，也没有 DownloadListener），升级到 0.2.4 后才真正落盘。
 
 ### 7.6 重复导入同一个 ZIP
 
@@ -266,11 +276,11 @@ $adb = "$env:ANDROID_HOME\platform-tools\adb.exe"
 
 | 数据 | 位置 | 清除方式 |
 | --- | --- | --- |
-| 会话 / 附件 | 应用私有 IndexedDB | 应用内「设置 → 数据 → 清空」，或卸载 |
+| 会话 / 附件 | 应用私有 IndexedDB | 应用内「设置 → 数据管理 → 删除」，或卸载 |
 | API Key | EncryptedSharedPreferences（密钥在 Android Keystore） | 应用内设置里清除，或卸载 |
-| 导入备份 | `Documents/DeepChat/` | 在文件管理里手动删 |
+| 导出 / 导入备份 ZIP | `Documents/DeepChat/` | 在文件管理里手动删 |
 
-**卸载会清掉前两项，但不会删 `Documents/DeepChat/` 里的备份** —— 那是刻意设计，
+**卸载会清掉前两项，但不会删 `Documents/DeepChat/` 里的 ZIP** —— 那是刻意设计，
 防止误卸载后连退路都没了。要彻底清除请手动删那个目录。
 
 `allowBackup="false"`，所以这些数据**不会**被系统云备份带走 —— 换手机不会自动迁移，
@@ -283,7 +293,7 @@ $adb = "$env:ANDROID_HOME\platform-tools\adb.exe"
 收集这三样：
 
 1. **系统版本**：设置 → 关于手机 → HarmonyOS 版本
-2. **应用版本**：应用内 设置 → 关于（或看 APK 文件名 `deep-chat-0.2.3-...`）
+2. **应用版本**：应用内 设置 → 关于（或看 APK 文件名 `deep-chat-0.2.4-...`）
 3. **日志**（如果能连电脑）：
 
    ```powershell
