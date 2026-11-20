@@ -21,7 +21,7 @@
  *   • 排查问题时不用连电脑抓日志，截图即可（真机反馈就是靠这个拿到的）。
  */
 
-import type { BackupSkipReason, MergeResult } from './import-bridge.js'
+import type { BackupSkipReason, MergeResult, ReadMode } from './import-bridge.js'
 import { button, createDialog, nextPaint, palette, paragraph, row, title } from './ui.js'
 
 type Line = { label: string; value: string | number; color?: string }
@@ -44,6 +44,17 @@ const statLine = (line: Line): HTMLDivElement => {
 
 const seconds = (milliseconds: number): string =>
   milliseconds < 1000 ? `${milliseconds} ms` : `${(milliseconds / 1000).toFixed(1)} s`
+
+const formatBytes = (bytes: number): string =>
+  bytes >= 1024 * 1024
+    ? `${(bytes / 1024 / 1024).toFixed(1)} MB`
+    : `${Math.max(1, Math.round(bytes / 1024))} KB`
+
+const readModeText: Record<ReadMode, string> = {
+  memory: '内存',
+  stream: '流式',
+  direct: '直读',
+}
 
 const backupSkipText: Record<BackupSkipReason, string> = {
   empty: '本机还没有会话，无需备份',
@@ -99,10 +110,26 @@ export const showImportResult = async (result: MergeResult): Promise<void> => {
   }
 
   // 耗时明细：慢的时候用户能直接说「解析占了大头」，排查不用再猜。
+  // 解析还拆成子桶：真机上「解压 / JSON / 转换 / 写暂存 / 图片」对应完全不同的优化手段。
+  const subParts = [
+    result.timing.decompress > 0 ? `解压 ${seconds(result.timing.decompress)}` : null,
+    result.timing.json > 0 ? `JSON ${seconds(result.timing.json)}` : null,
+    result.timing.convert > 0 ? `转换 ${seconds(result.timing.convert)}` : null,
+    result.timing.stageWrite > 0 ? `写暂存 ${seconds(result.timing.stageWrite)}` : null,
+    result.timing.imageRead + result.timing.imageWrite > 0
+      ? `图片 ${seconds(result.timing.imageRead + result.timing.imageWrite)}`
+      : null,
+  ].filter((item): item is string => item !== null)
+  const parseText =
+    subParts.length > 0
+      ? `解析 ${seconds(result.timing.parse)}（${subParts.join(' / ')}）`
+      : `解析 ${seconds(result.timing.parse)}`
   const detail = [
-    result.timing.read > 0 ? `读取 ${seconds(result.timing.read)}` : null,
+    result.timing.read > 0
+      ? `读取 ${seconds(result.timing.read)}（${readModeText[result.readMode]}）`
+      : null,
     `校验 ${seconds(result.timing.check)}`,
-    `解析 ${seconds(result.timing.parse)}`,
+    parseText,
     result.timing.backup > 0 ? `备份 ${seconds(result.timing.backup)}` : null,
     `写入 ${seconds(result.timing.commit)}`,
   ]
@@ -112,6 +139,17 @@ export const showImportResult = async (result: MergeResult): Promise<void> => {
   timing.style.marginTop = '10px'
   timing.id = 'shell-import-timing'
   card.append(timing)
+
+  // 环境行：下一次排查直接截图就能知道归档多大、走的哪条读取路径、产生了几个事务。
+  const env = [
+    `ZIP ${formatBytes(result.archiveBytes)}`,
+    `读取方式 ${readModeText[result.readMode]}`,
+    `暂存事务 ${result.stageTxns} 次`,
+    `图片事务 ${result.imageTxns} 次`,
+  ].join(' · ')
+  const envLine = paragraph(env, c.muted)
+  envLine.id = 'shell-import-env'
+  card.append(envLine)
 
   if (result.parsed !== total - result.failed) {
     // 有会话是靠账本直接跳过、没有解压的：解释一下「为什么这么快」

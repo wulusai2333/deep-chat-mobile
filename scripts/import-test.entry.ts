@@ -149,6 +149,14 @@ const run = async () => {
 
   const r1 = await mergeImport(zipA)
   check(r1.added === 2 && r1.updated === 0 && r1.failed === 0, '场景1 空库导入两个会话', r1)
+  check(
+    r1.readMode === 'memory' &&
+      r1.archiveBytes === zipA.size &&
+      r1.timing.decompress + r1.timing.json + r1.timing.convert + r1.timing.stageWrite <=
+        r1.timing.parse + 100,
+    '场景1 读取方式/归档大小/解析子桶记录正确',
+    { readMode: r1.readMode, archiveBytes: r1.archiveBytes, timing: r1.timing }
+  )
   let summaries = await db.loadSessionSummaries()
   check(summaries.length === 2, '场景1 库里有 2 个会话', summaries.map((s) => s.id))
   const loadedA = await db.loadSession('sess-a')
@@ -546,6 +554,11 @@ const run = async () => {
     '场景12 同一路径下的备份也走分块协议',
     { chunks: chunkStub.backup.chunks, finished: chunkStub.backup.finished }
   )
+  check(
+    window.__IMPORT_PROFILE__?.readMode === 'memory',
+    '场景12 原生分块读入的 File 不再重复拷贝（readMode=memory）',
+    window.__IMPORT_PROFILE__?.readMode
+  )
   delete (globalThis as any).Capacitor
 
   // ══ 场景 13：暂存辅助函数（批量写 / 游标收集 / 定向回填）══
@@ -692,10 +705,11 @@ const run = async () => {
   const r15 = await mergeImport(sliceZip)
   check(r15.added === 3, '场景15 计数 File 的归档仍能完整导入', r15.added)
   check(
-    sliceCount <= 30,
-    '场景15 一次导入的 File.slice 次数与条目数同阶（不再逐条解析多遍）',
-    { sliceCount, entries: 5 }
+    r15.readMode === 'memory' && r15.archiveBytes === sliceZip.size,
+    '场景15 归档被一次性读入内存并记录大小（不再逐条随机读）',
+    { readMode: r15.readMode, archiveBytes: r15.archiveBytes, expected: sliceZip.size, sliceCount }
   )
+  check(r15.stageTxns <= 2, '场景15 暂存事务按大批次合并', { stageTxns: r15.stageTxns })
 
   // ══ 场景 16：账本 v2 键格式；旧版文本指纹键被淘汰 ══
   localStorage.setItem(
@@ -756,6 +770,25 @@ const run = async () => {
     '场景18 失败后正式数据不变（原子性）',
     { beforeRollback, after: afterRollback.length }
   )
+
+  // ══ 场景 19：大批次 —— 120 条会话只产生 1~2 个暂存事务 ══
+  //
+  // 真机上 IndexedDB 每次事务提交都有固定成本：用户 594 条首次导入时 25 个小事务花了 96 s。
+  // 这批断言把「按字节/条数合并事务」钉住，防止以后又退回逐条或小批。
+  const batchSessions = Array.from({ length: 120 }, (_, index) =>
+    sessionFile({
+      id: `sess-batch-${index}`,
+      title: `批次 ${index}`,
+      updatedAt: T3,
+      messages: [msg(1, null, 'USER', `第 ${index} 条`, T3)],
+    })
+  )
+  const batchZip = await makeArchive(batchSessions)
+  const r19 = await mergeImport(batchZip)
+  check(r19.added === 120, '场景19 120 条会话导入成功', r19.added)
+  check(r19.stageTxns <= 2, '场景19 会话暂存合并为大批次（≤2 个事务）', {
+    stageTxns: r19.stageTxns,
+  })
 
   // ══ 汇总 ══
   const failed = results.filter((r) => !r.ok)

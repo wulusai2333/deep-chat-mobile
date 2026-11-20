@@ -76,12 +76,28 @@ import { NATIVE_CHUNK_BYTES, saveArchiveToDevice, yieldToPaint } from './native-
 import { showImportResult, showImportProgress, type ImportProgress } from './import-ui.js'
 import { readLocalStorage, writeLocalStorage } from './storage-utils.js'
 
+/** 归档是怎么交给解析器的：一次性读入内存 / 流式收集 / 直接读原 File（回退） */
+export type ReadMode = 'memory' | 'stream' | 'direct'
+
 /** 各阶段耗时（毫秒）。提交包含「搬数据 + 重载摘要 + 状态收尾」，是总时长减出来的。 */
 export type ImportTiming = {
   /** 把系统选择器给的 File 读进内存（SAF content URI 必须一次性读，见 materializeArchive） */
   read: number
   check: number
+  /** 解析总时长；下面几个子桶是它的拆分 */
   parse: number
+  /** readEntryBytes：解压 + CRC */
+  decompress: number
+  /** TextDecoder + JSON.parse */
+  json: number
+  /** readSessionFile + toLocalSession（校验与树重建） */
+  convert: number
+  /** 写暂存会话的 IndexedDB 等待 */
+  stageWrite: number
+  /** 读图片条目 */
+  imageRead: number
+  /** 写暂存图片的 IndexedDB 等待 */
+  imageWrite: number
   backup: number
   commit: number
   total: number
@@ -106,6 +122,13 @@ export type MergeResult = {
   parsed: number
   /** 本次靠账本 + 原生跳过（不解析、不写库）的会话数 */
   skippedFast: number
+  /** 归档原始大小（字节） */
+  archiveBytes: number
+  /** 归档读取方式 */
+  readMode: ReadMode
+  /** 会话暂存事务次数 / 图片暂存事务次数（真机事务提交有固定成本，这两个数直接对应耗时） */
+  stageTxns: number
+  imageTxns: number
   timing: ImportTiming
 }
 
@@ -123,6 +146,10 @@ declare global {
       skipped: number
       skippedFast: number
       parsed: number
+      archiveBytes: number
+      readMode: ReadMode
+      stageTxns: number
+      imageTxns: number
     }
   }
 }
@@ -131,14 +158,21 @@ const LEDGER_KEY = 'deep-chat:import-ledger'
 const BACKUP_ENABLED_KEY = 'deep-chat:import-backup'
 const LAST_BACKUP_KEY = 'deep-chat:last-backup'
 
-/** 暂存会话批量写：每批条数。593 条 → 约 20–25 个事务。 */
-const SESSION_BATCH_SIZE = 24
+/**
+ * 暂存会话批量写：按字节 / 条数双阈值。
+ *
+ * 【为什么从 24 条改成 8 MB / 250 条】真机上 IndexedDB 每次事务提交都有可观的固定成本：
+ * 用户 594 条首次导入时，25 个「24 条/批」的小事务花了 96 s，而 commit 用 1 个事务写 594 条
+ * 只要 8 s。批大一点、事务少一点，是这台机器上最直接的提速手段。
+ */
+const SESSION_BATCH_BYTES = 8 * 1024 * 1024
+const SESSION_BATCH_SIZE = 250
 
-/** 图片批量写：单批字节上限。图片单张最大 0.9 MB，4 MB 一批兼顾内存与事务数。 */
-const IMAGE_BATCH_BYTES = 4 * 1024 * 1024
+/** 图片批量写：单批字节上限。图片单张最大 0.9 MB，16 MB 一批兼顾内存与事务数。 */
+const IMAGE_BATCH_BYTES = 16 * 1024 * 1024
 
 /** 图片批量写：单批条数上限（小图时避免一批塞太多记录）。 */
-const IMAGE_BATCH_COUNT = 16
+const IMAGE_BATCH_COUNT = 64
 
 /** 账本上限：只保留最近 5000 条（约 300 KB localStorage），避免无限增长。 */
 const LEDGER_LIMIT = 5000
@@ -390,7 +424,10 @@ const readPendingArchive = async (report: ProgressReporter): Promise<File | null
   }
   // Blob 拼接不复制数据；File 只是给它一个名字，供上游的错误提示使用
   const blob = new Blob(parts, { type: 'application/zip' })
-  return new File([blob], opened.name, { type: 'application/zip' })
+  const file = new File([blob], opened.name, { type: 'application/zip' })
+  // 这条路径已经把内容读进内存了：再 materialize 一次是纯拷贝，标记后跳过。
+  inMemoryArchives.add(file)
+  return file
 }
 
 /**
@@ -443,22 +480,70 @@ const keepScreenAwake = (): (() => void) => {
 }
 
 /**
- * 系统文件选择器给出的 File 在 Android 上是 content:// 流：每次 `slice().arrayBuffer()`
- * 都会重新 open + seek，几十次小块读会退化成 O(n²) 的 provider 读取。
- * 真机实测：32 MB 归档光「跳过已导入」就花 36 秒。这里一次性读进内存，
- * 之后所有切片都在内存 Blob 上，解析才回到正常速度。
+ * 把归档读成内存里的 File。
  *
- * 上限与原生读取一致（48 MB）；超过上限维持原 File（原生分块读取路径本来就拼成了内存 Blob）。
+ * 【为什么必须这么做】系统文件选择器给出的是 `content://` 流：每一次 `slice().arrayBuffer()`
+ * 都会重新 open + seek 到偏移。条目越多、偏移越大，累计读取量就越接近 O(n²)：
+ * 用户真机（归档 > 48 MB）第二轮「全部跳过」什么都没解析、什么都没写，却花了 75.6 s ——
+ * 时间全花在这种随机读上。
+ *
+ * 0.2.5 只对 ≤ 48 MB 做了这件事，用户的归档刚好超过上限，等于没生效。现在：
+ *   • ≤ 128 MB：`arrayBuffer()` 一次性读入（一次 open、顺序读）；
+ *   • 128–256 MB：`file.stream()` 逐块收进 Blob 分片（字节留在浏览器进程，避免 JS 大数组）；
+ *   • 原生「用其他应用打开 ZIP」拼出来的 File 本来就在内存里，直接跳过拷贝；
+ *   • 任一步失败都回退原 File（最坏回到旧行为，不会更差）。
  */
-const MATERIALIZE_LIMIT = 48 * 1024 * 1024
+const BUFFER_LIMIT = 128 * 1024 * 1024
+const MATERIALIZE_LIMIT = 256 * 1024 * 1024
 
-const materializeArchive = async (file: File, report: ProgressReporter): Promise<File> => {
+/** 原生分块读取路径拼出来的 File：已经在内存里，不必再拷贝一次 */
+const inMemoryArchives = new WeakSet<File>()
+
+/** 把 File/Blob 流式收进 Blob 分片，再包成 File（字节不进 JS 堆） */
+const readAllViaStream = async (file: File): Promise<File> => {
+  const parts: Blob[] = []
+  const stream = file.stream()
+  const reader = stream.getReader()
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) {
+        break
+      }
+      if (value && value.length > 0) {
+        parts.push(new Blob([value as Uint8Array<ArrayBuffer>]))
+      }
+    }
+  } finally {
+    reader.releaseLock()
+  }
+  return new File([new Blob(parts)], file.name, { type: 'application/zip' })
+}
+
+const materializeArchive = async (
+  file: File,
+  report: ProgressReporter
+): Promise<{ archive: File; mode: ReadMode }> => {
+  if (inMemoryArchives.has(file)) {
+    return { archive: file, mode: 'memory' }
+  }
   if (file.size === 0 || file.size > MATERIALIZE_LIMIT) {
-    return file
+    return { archive: file, mode: 'direct' }
   }
   report({ phase: '正在读取导入文件', done: null, total: file.size })
-  const buffer = await file.arrayBuffer()
-  return new File([buffer], file.name, { type: 'application/zip' })
+  if (file.size <= BUFFER_LIMIT) {
+    try {
+      const buffer = await file.arrayBuffer()
+      return { archive: new File([buffer], file.name, { type: 'application/zip' }), mode: 'memory' }
+    } catch {
+      // 内存不足：退到流式收集，不把整个文件放进 JS 堆
+    }
+  }
+  try {
+    return { archive: await readAllViaStream(file), mode: 'stream' }
+  } catch {
+    return { archive: file, mode: 'direct' }
+  }
 }
 
 /** 合并导入主流程。 */
@@ -480,7 +565,24 @@ export const mergeImport = async (
     errors: [],
     parsed: 0,
     skippedFast: 0,
-    timing: { read: 0, check: 0, parse: 0, backup: 0, commit: 0, total: 0 },
+    archiveBytes: file.size,
+    readMode: 'direct',
+    stageTxns: 0,
+    imageTxns: 0,
+    timing: {
+      read: 0,
+      check: 0,
+      parse: 0,
+      decompress: 0,
+      json: 0,
+      convert: 0,
+      stageWrite: 0,
+      imageRead: 0,
+      imageWrite: 0,
+      backup: 0,
+      commit: 0,
+      total: 0,
+    },
   }
 
   // 账本在 try 之外读/写：成功才写（finally 里不写，异常会直接抛出去）。
@@ -489,7 +591,8 @@ export const mergeImport = async (
   try {
     // 1. 先把归档读进内存（content:// 流不能反复 slice，见 materializeArchive）。
     const readStart = performance.now()
-    const archive = await materializeArchive(file, report)
+    const { archive, mode } = await materializeArchive(file, report)
+    result.readMode = mode
     result.timing.read = Math.round(performance.now() - readStart)
 
     // 2. 格式校验（上游实现，含 manifest 版本检查）。目录只读一次，后续全都命中缓存。
@@ -522,8 +625,9 @@ export const mergeImport = async (
     const sniffed = new Map<string, string>()
     /** 本次真正写进暂存、且带图片的会话 id —— 只给它们回填 MIME */
     const imageOwners = new Set<string>()
-    /** 暂存会话批写缓冲：满 SESSION_BATCH_SIZE 条提交一次 */
+    /** 暂存会话批写缓冲：按字节 / 条数上限提交（真机上事务提交有固定成本） */
     const sessionBatch: Session[] = []
+    let sessionBatchBytes = 0
     /** 图片批写缓冲：条数或字节数到上限就提交，避免大批量图片把内存顶上去 */
     const imageBatch: { id: string; blob: Blob }[] = []
     let imageBatchBytes = 0
@@ -544,7 +648,11 @@ export const mergeImport = async (
             return
           }
           const batch = sessionBatch.splice(0, sessionBatch.length)
+          sessionBatchBytes = 0
+          const started = performance.now()
           await db.putStagingSessions(batch)
+          result.timing.stageWrite += Math.round(performance.now() - started)
+          result.stageTxns += 1
           await yieldToPaint()
         }
 
@@ -555,7 +663,10 @@ export const mergeImport = async (
           }
           const batch = imageBatch.splice(0, imageBatch.length)
           imageBatchBytes = 0
+          const started = performance.now()
           await db.saveStagingFiles(batch)
+          result.timing.imageWrite += Math.round(performance.now() - started)
+          result.imageTxns += 1
           await yieldToPaint()
         }
 
@@ -610,15 +721,24 @@ export const mergeImport = async (
             // 不能被误判成「这一条会话坏了」然后继续。
             let session: Session | undefined
             let sessionImages: Map<string, string> | undefined
+            let sessionBytes = 0
             try {
+              const decompressStart = performance.now()
               const bytes = await readEntryBytes(entry)
-              const parsedFile = readSessionFile(JSON.parse(new TextDecoder().decode(bytes)))
+              result.timing.decompress += Math.round(performance.now() - decompressStart)
+              const jsonStart = performance.now()
+              const json = JSON.parse(new TextDecoder().decode(bytes))
+              result.timing.json += Math.round(performance.now() - jsonStart)
+              const convertStart = performance.now()
+              const parsedFile = readSessionFile(json)
               // 文件名与内容 id 不一致属于归档损坏，不是「这一条跳过」能解决的
               if (parsedFile.id !== sessionId) {
                 throw new Error(`会话 id 不一致：文件名 ${sessionId}，内容 ${parsedFile.id}`)
               }
               const local = toLocalSession(parsedFile)
+              result.timing.convert += Math.round(performance.now() - convertStart)
               parsed += 1
+              sessionBytes = bytes.length
               if (known !== undefined && local.session.updatedAt <= known) {
                 // 本机这份不比导入的旧 → 留本机，绝不拿旧内容覆盖用户正在用的会话
                 result.skipped += 1
@@ -644,7 +764,11 @@ export const mergeImport = async (
               continue
             }
             sessionBatch.push(session)
-            if (sessionBatch.length >= SESSION_BATCH_SIZE) {
+            sessionBatchBytes += sessionBytes
+            if (
+              sessionBatch.length >= SESSION_BATCH_SIZE ||
+              sessionBatchBytes >= SESSION_BATCH_BYTES
+            ) {
               await flushSessions()
             }
             sawSession = true
@@ -684,7 +808,9 @@ export const mergeImport = async (
             tick('正在处理附件')
             continue
           }
+          const imageReadStart = performance.now()
           const data = await readEntryBytes(entry)
+          result.timing.imageRead += Math.round(performance.now() - imageReadStart)
           const mimeType = imageType(data.subarray(0, 16))
           imageBatch.push({ id, blob: new Blob([data as Uint8Array<ArrayBuffer>], { type: mimeType }) })
           imageBatchBytes += data.length
@@ -752,7 +878,18 @@ export const mergeImport = async (
       0,
       result.timing.total - result.timing.check - result.timing.parse - result.timing.backup
     )
-    const profile = { ...result.timing, added: result.added, updated: result.updated, skipped: result.skipped, skippedFast: result.skippedFast, parsed: result.parsed }
+    const profile = {
+      ...result.timing,
+      added: result.added,
+      updated: result.updated,
+      skipped: result.skipped,
+      skippedFast: result.skippedFast,
+      parsed: result.parsed,
+      archiveBytes: result.archiveBytes,
+      readMode: result.readMode,
+      stageTxns: result.stageTxns,
+      imageTxns: result.imageTxns,
+    }
     window.__IMPORT_PROFILE__ = profile
     // Capacitor 会把 WebView 的 console 转发到 logcat（tag Capacitor/Console），
     // 真机排查「到底慢在哪」直接筛 [import-perf] 即可。

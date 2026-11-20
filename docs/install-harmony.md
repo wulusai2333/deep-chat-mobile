@@ -1,6 +1,6 @@
 # 在鸿蒙 4.3 上安装
 
-目标机型：华为 Mate 70 Pro+（HarmonyOS 4.3 / API 兼容层）。
+目标环境：鸿蒙 4.x 的 Android 兼容层。**本项目开发期只在 Android 模拟器（MuMu，API 32）上验证过**，鸿蒙真机请以你自己的安装结果为准。
 APK 走的是鸿蒙内置的 Android 兼容层，不需要任何「刷机」「开发者模式」之类的操作。
 
 > 本文以鸿蒙 4.3 为例。**其他 Android 7.0+ 机型（含鸿蒙 4.x）的兼容范围、WebView 要求、
@@ -137,7 +137,7 @@ $env:ANDROID_HOME = 'D:\soft\android-sdk'
 $adb = "$env:ANDROID_HOME\platform-tools\adb.exe"
 
 & $adb devices          # 手机上会弹「允许 USB 调试吗」，勾选「始终允许」
-& $adb install -r "dist-apk\deep-chat-0.2.5-x64-release.apk"
+& $adb install -r "dist-apk\deep-chat-0.2.6-x64-release.apk"
 ```
 
 装完可以直接看日志，排查问题非常有用：
@@ -293,7 +293,7 @@ $adb = "$env:ANDROID_HOME\platform-tools\adb.exe"
 收集这三样：
 
 1. **系统版本**：设置 → 关于手机 → HarmonyOS 版本
-2. **应用版本**：应用内 设置 → 关于（或看 APK 文件名 `deep-chat-0.2.5-...`）
+2. **应用版本**：应用内 设置 → 关于（或看 APK 文件名 `deep-chat-0.2.6-...`）
 3. **日志**（如果能连电脑）：
 
    ```powershell
