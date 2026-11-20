@@ -50,8 +50,15 @@ export const palette = (): Palette => {
 /**
  * 全屏遮罩 + 居中卡片。
  * 遮罩自己避让安全区：壳层界面在最上层，`.frame` 上的 padding 管不到它。
+ *
+ * 【blur 可以关】`backdrop-filter` 在 Android WebView 上会让整屏背景每帧重新合成。
+ * 一次性弹窗（结果页、引导）无所谓；像导入进度这种要在上面持续更新的全屏浮层，
+ * 开着它等于给主线程加一份持续的合成负担，所以调用方可以传 { blur: false }。
  */
-export const createDialog = (id: string): { host: HTMLDivElement; card: HTMLDivElement } => {
+export const createDialog = (
+  id: string,
+  options: { blur?: boolean } = {}
+): { host: HTMLDivElement; card: HTMLDivElement } => {
   const c = palette()
   const host = document.createElement('div')
   host.id = id
@@ -69,9 +76,11 @@ export const createDialog = (id: string): { host: HTMLDivElement; card: HTMLDivE
     'padding-top:calc(24px + env(safe-area-inset-top, 0px))',
     'padding-bottom:calc(24px + env(safe-area-inset-bottom, 0px))',
     'box-sizing:border-box',
-    '-webkit-backdrop-filter:blur(2px)',
-    'backdrop-filter:blur(2px)',
-  ].join(';')
+    options.blur === false ? '' : '-webkit-backdrop-filter:blur(2px)',
+    options.blur === false ? '' : 'backdrop-filter:blur(2px)',
+  ]
+    .filter(Boolean)
+    .join(';')
 
   const card = document.createElement('div')
   card.style.cssText = [

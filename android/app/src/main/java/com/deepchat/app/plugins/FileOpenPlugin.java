@@ -78,8 +78,15 @@ public class FileOpenPlugin extends Plugin {
     /** 单文件上限：超过就不读了，避免 OOM。48 MB 足够容纳正常的历史导出。 */
     private static final long MAX_BYTES = 48L * 1024 * 1024;
 
-    /** 单次桥调用携带的原始字节上限；base64 后约 341 KB 字符串。 */
-    private static final int MAX_CHUNK_BYTES = 256 * 1024;
+    /**
+     * 单次桥调用携带的原始字节上限；base64 后约 1.4 MB 字符串。
+     *
+     * 0.2.5 从 256 KB 提到 1 MB：备份 ZIP 动辄 50 MB，256 KB 分块意味着 200 次
+     * WebView→原生往返（每次都 base64 编解码 + JSON 序列化）。1 MB 后往返少 4 倍，
+     * 单次内存占用仍然很小（1 MB byte[] + 1.4 MB String）。
+     * 必须与 web-patches/native-backup.ts 的 NATIVE_CHUNK_BYTES 保持一致。
+     */
+    private static final int MAX_CHUNK_BYTES = 1024 * 1024;
 
     /** 备份上传上限，防止异常调用把应用缓存写满。 */
     private static final long MAX_BACKUP_BYTES = 256L * 1024 * 1024;

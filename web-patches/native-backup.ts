@@ -26,21 +26,31 @@ import { PLUGIN_FILES, callNative } from './bridge.js'
 /**
  * 原生桥单次往返的原始字节上限。
  * 必须与 native/file-open/FileOpenPlugin.java 的 MAX_CHUNK_BYTES 保持一致：
- * 原生对 length > 256 KB 的请求直接 reject。
+ * 原生对 length > 上限 的请求直接 reject。
+ *
+ * 【0.2.5 从 256 KB 提到 1 MB】备份 ZIP 动辄 50 MB，256 KB 分块意味着 200 次
+ * WebView→原生往返（每次都要 base64 编解码 + JSON 序列化）。1 MB 分块后往返少 4 倍，
+ * 单次负载 1.4 MB 的 base64 字符串对内存仍然很小。
  */
-export const NATIVE_CHUNK_BYTES = 256 * 1024
+export const NATIVE_CHUNK_BYTES = 1024 * 1024
 
 /**
- * 让出主线程，给浏览器一帧去画进度条。
+ * 让出主线程。
  *
- * 【为什么叫 paint 而不是 yield】
- * 连续写几十 MB 时每一步都是 await，但 Promise 微任务之间不保证浏览器能拿到
- * 渲染帧。setTimeout(0) 把控制权交回事件循环，rAF 才有机会执行 —— 否则进度条
- * 会整段不动，用户以为卡死。
+ * 【为什么不用 setTimeout(0)】Android WebView 在页面不可见时会把定时器钳到 ~1 秒；
+ * 导入大归档要几分钟，用户锁屏/切走后，每个批次都被拖成 1 秒，进度看起来就是「一秒一条」。
+ * MessageChannel 是宏任务，不经过定时器队列，不会被这个钳制影响。
+ *
+ * 进度条的绘制仍然交给调用方的 rAF / 定时器 —— 这里只保证主线程有机会处理事件。
  */
 export const yieldToPaint = (): Promise<void> =>
   new Promise((resolve) => {
-    setTimeout(resolve, 0)
+    const channel = new MessageChannel()
+    channel.port1.onmessage = () => {
+      channel.port1.close()
+      resolve()
+    }
+    channel.port2.postMessage(0)
   })
 
 /** Blob → base64，分块拼接避免 `String.fromCharCode(...bigArray)` 爆栈 */

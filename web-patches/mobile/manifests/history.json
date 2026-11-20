@@ -1,0 +1,11 @@
+{
+  "area": "history",
+  "owner": "history",
+  "overrides": [
+    {
+      "to": "src/services/chat/history/zipReader.ts",
+      "from": "overrides/history/zipReader.ts",
+      "upstreamSha256": "a182ad211da485b4f046aa0188470c47c17ecf70388c3b090bac142f6bdd8c44"
+    }
+  ]
+}

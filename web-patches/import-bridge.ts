@@ -10,12 +10,10 @@
  *
  * 【merge 怎么做到既合并又不破坏上游的原子性】
  * 上游 `commitStaging()` 是「清空正式表 → 从暂存搬入」，靠这个保证「要么全成、要么全不动」。
- * 想复用它做合并，唯一办法是让暂存里装的是 **并集**：
- *   1. `db.stageCurrentHistory()` 先把正式表的会话与原件整体复制进暂存；
- *   2. 再把 ZIP 里的会话按 id `put` 进暂存（同 id 覆盖 = 更新，新 id 追加）；
- *   3. 交给 `commitStaging()` 一次性搬回 —— 事务失败则整体回滚，正式数据不变。
- * 既保留了上游的原子性，又实现了合并。这两个 db 辅助函数是本项目新增的
- * （见 patches/db.merge.ts.patch），上游既有函数一个都没改。
+ * 0.2.4 的合并实现让暂存装**并集**：先把现有正式数据整条复制进暂存，再把导入数据 put 进去，
+ * 最后整体搬回。正确，但等于每次导入都把本机全量数据多写两遍 —— 真机上这是分钟级耗时的
+ * 主因之一。0.2.5 改成 `db.commitMergeStaging()`：只把本次导入的会话/原件 put 进正式表，
+ * 不清空正式表；**仍是同一个事务**，失败整体回滚。原子性不变，写入量降到 1/3。
  *
  * 【附件 MIME 的坑】
  * 上游 `updateStagingFileTypes(types)` 对暂存里每个附件执行
@@ -24,26 +22,32 @@
  * 合并时现有会话的附件不在映射里，直接调用会把老会话的图片/PDF 类型抹掉。
  * 第一版用 `collectStagingFileTypes()` 全量重读暂存再叠加，代价是 593 条会话 / 35 MB JSON
  * 再反序列化一次（实测堆峰值 227 MB）。现在改成 `updateStagingImageTypes(types, ids)`：
- * 现有会话是整条复制进暂存的，MIME 原样保留；只给「本次新写入、且带图片」的会话回填，
- * 结果等价但不再全量扫描。
+ * 现有会话不再进暂存，本来就不需要回填；只给「本次新写入、且带图片」的会话回填。
  *
  * 【大归档为什么要分块 + 分批】
  * 用户的真实归档是 31 MB / 677 条目 / 593 条会话 / 81 张图。整包 base64 过桥、593 个单条
  * 事务、getAll 全量进堆，三者叠加会同时「慢到分钟级」和「把低端机顶到 OOM 闪退」。现在：
- *   • 备份上传与文件读入都走 256 KB 分块（原生契约见 native/file-open/README.md）；
+ *   • 备份上传与文件读入都走原生分块（原生契约见 native/file-open/README.md）；
  *   • 暂存会话/图片按批写（每批一个事务），批间让出主线程让进度条能画；
- *   • 中央目录在 zipReader 里按 File 缓存，一次导入只解析一遍。
- * 实测数据与上界估算见 docs/import-performance.md。
+ *   • 中央目录在 zipReader 里按 File 缓存，且整份目录只读一次（见 zipReader fork）。
  *
- * 【幂等】
- * 同一个 ZIP 连导三次，会话数不能变。两层保障：
- *   1. 账本（localStorage，只有 id 与计数，无敏感信息）：命中即 skipped；
- *   2. `updatedAt` 不比本机新的也 skipped —— 账本丢了也不会重复追加或回退内容。
+ * 【重复导入为什么能快】
+ * 账本 v2 的键是 `会话id|CRC|解压后大小`，三者都来自**已校验过的中央目录**，不需要解压。
+ * 命中且本机仍存在该会话时，直接把该条目的原始字节丢掉（不 inflate、不 parse、不写库）。
+ * 旧版账本键（文本指纹）会被自动忽略，升级后第一次导入仍走完整解析，只多一轮。
  *
  * 【为什么单条坏会话不整批失败】
  * 需求要求结果页给出 {added, updated, skipped, failed}，说明允许部分成功。
  * 但 **ZIP 结构本身损坏**（ArchiveError）必须整批回滚 —— 那说明文件不可信，
  * 继续读只会在半截数据上做决策。
+ *
+ * 【导入前的自动备份】
+ * 0.2.4 在解析之前就做备份；0.2.5 改到「解析完、确认本次确实要写数据」之后、提交之前：
+ *   • 本机没有会话 → 没什么可备份的；
+ *   • 本次全部被跳过 → 不写数据，也就没有退路问题；
+ *   • 上次成功备份后数据没变 → 复用上次的备份即可；
+ *   • 用户关掉开关 → 按用户选择（默认开）。
+ * 备份仍然严格发生在写正式表之前，失败仍然中止导入。
  */
 
 import { exportHistorySnapshot } from '../services/chat/backup.js'
@@ -62,20 +66,29 @@ import {
   ArchiveError,
   countZipEntries,
   readArchive,
-  readEntry,
+  readEntryBytes,
   skipEntry,
-  type ArchiveEntry,
 } from '../services/chat/history/zipReader.js'
 import { replaceHistory } from '../services/chat/store.js'
-import type { Session } from '../services/chat/types.js'
+import type { Session, SessionSummary } from '../services/chat/types.js'
 import { PLUGIN_FILES, callNative, isNativeShell } from './bridge.js'
-import {
-  NATIVE_CHUNK_BYTES,
-  saveArchiveToDevice,
-  yieldToPaint,
-} from './native-backup.js'
+import { NATIVE_CHUNK_BYTES, saveArchiveToDevice, yieldToPaint } from './native-backup.js'
 import { showImportResult, showImportProgress, type ImportProgress } from './import-ui.js'
 import { readLocalStorage, writeLocalStorage } from './storage-utils.js'
+
+/** 各阶段耗时（毫秒）。提交包含「搬数据 + 重载摘要 + 状态收尾」，是总时长减出来的。 */
+export type ImportTiming = {
+  /** 把系统选择器给的 File 读进内存（SAF content URI 必须一次性读，见 materializeArchive） */
+  read: number
+  check: number
+  parse: number
+  backup: number
+  commit: number
+  total: number
+}
+
+/** 备份被跳过的原因；真的做了备份时为 null */
+export type BackupSkipReason = 'empty' | 'unchanged' | 'disabled' | 'nothing'
 
 /** 导入结果：四个数字加起来应当等于 ZIP 里的会话数 */
 export type MergeResult = {
@@ -83,10 +96,17 @@ export type MergeResult = {
   updated: number
   skipped: number
   failed: number
-  /** 导入前自动备份的位置；浏览器（无原生壳）为 null */
+  /** 导入前自动备份的位置；未备份（浏览器 / 跳过）为 null */
   backupPath: string | null
+  /** 备份被跳过的原因；真备份了是 null */
+  backupSkipped: BackupSkipReason | null
   /** 逐条失败原因，最多 5 条，避免刷屏 */
   errors: string[]
+  /** 实际解压并解析的会话数；账本快速跳过的不算 */
+  parsed: number
+  /** 本次靠账本 + 原生跳过（不解析、不写库）的会话数 */
+  skippedFast: number
+  timing: ImportTiming
 }
 
 /** 进度回调：合并过程中反复调用，让界面能显示「到哪一步了」 */
@@ -96,12 +116,22 @@ declare global {
   interface Window {
     /** 上游 backup.ts 补丁检测到它就改用合并导入；浏览器里不存在 */
     __DEEP_CHAT_IMPORT__?: { merge(file: File): Promise<MergeResult> }
+    /** 最近一次导入的阶段耗时，供真机诊断/回归读数；浏览器里也有 */
+    __IMPORT_PROFILE__?: ImportTiming & {
+      added: number
+      updated: number
+      skipped: number
+      skippedFast: number
+      parsed: number
+    }
   }
 }
 
 const LEDGER_KEY = 'deep-chat:import-ledger'
+const BACKUP_ENABLED_KEY = 'deep-chat:import-backup'
+const LAST_BACKUP_KEY = 'deep-chat:last-backup'
 
-/** 暂存会话批量写：每批条数。593 条 → 约 20–30 个事务（旧实现是 593 个）。 */
+/** 暂存会话批量写：每批条数。593 条 → 约 20–25 个事务。 */
 const SESSION_BATCH_SIZE = 24
 
 /** 图片批量写：单批字节上限。图片单张最大 0.9 MB，4 MB 一批兼顾内存与事务数。 */
@@ -110,6 +140,12 @@ const IMAGE_BATCH_BYTES = 4 * 1024 * 1024
 /** 图片批量写：单批条数上限（小图时避免一批塞太多记录）。 */
 const IMAGE_BATCH_COUNT = 16
 
+/** 账本上限：只保留最近 5000 条（约 300 KB localStorage），避免无限增长。 */
+const LEDGER_LIMIT = 5000
+
+/** 账本 v2 键：`会话id|CRC|解压后大小`；旧版（文本指纹）键不匹配，读时丢弃。 */
+const LEDGER_KEY_PATTERN = /^[^|]+\|\d+\|\d+$/
+
 const readLedger = (): Record<string, true> => {
   const raw = readLocalStorage(LEDGER_KEY)
   if (!raw) {
@@ -117,10 +153,15 @@ const readLedger = (): Record<string, true> => {
   }
   try {
     const parsed: unknown = JSON.parse(raw)
-    // 只接受对象；数组/null/原始值一律当空账本
-    return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? (parsed as Record<string, true>)
-      : {}
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return {}
+    }
+    // 只接受 v2 键；旧版键在这里被自然淘汰。
+    return Object.fromEntries(
+      Object.entries(parsed as Record<string, unknown>).filter(
+        ([key, value]) => value === true && LEDGER_KEY_PATTERN.test(key)
+      )
+    ) as Record<string, true>
   } catch {
     return {}
   }
@@ -128,26 +169,71 @@ const readLedger = (): Record<string, true> => {
 
 const writeLedger = (ledger: Record<string, true>): void => {
   // 账本只是「跳过重复导入」的优化；写失败不影响正确性（updatedAt 兜底）
-  writeLocalStorage(LEDGER_KEY, JSON.stringify(ledger))
-}
-
-/** 末条消息的「体积」：用户消息看文本长度，助手消息看内容块数 */
-const tailSize = (session: Session): number => {
-  const last = session.messages[session.messages.length - 1]
-  if (!last) {
-    return 0
+  let entries = Object.entries(ledger)
+  if (entries.length > LEDGER_LIMIT) {
+    entries = entries.slice(entries.length - LEDGER_LIMIT)
   }
-  return last.role === 'user' ? last.content.length : last.blocks.length
+  writeLocalStorage(LEDGER_KEY, JSON.stringify(Object.fromEntries(entries)))
 }
 
-/** 内容指纹：会话没变过就一定命中，变了就大概率不命中 */
-const fingerprint = (session: Session): string =>
-  [
-    session.id,
-    session.messages.length,
-    session.messages[session.messages.length - 1]?.id ?? '-',
-    tailSize(session),
-  ].join('|')
+/** 导入前自动备份开关（确认弹窗里的复选框写这里）：默认开 */
+export const isAutoBackupEnabled = (): boolean => readLocalStorage(BACKUP_ENABLED_KEY) !== '0'
+
+export const setAutoBackupEnabled = (enabled: boolean): void => {
+  writeLocalStorage(BACKUP_ENABLED_KEY, enabled ? '1' : '0')
+}
+
+type BackupMeta = {
+  at: number
+  count: number
+  latest: number
+  titles: string
+}
+
+const readBackupMeta = (): BackupMeta | null => {
+  const raw = readLocalStorage(LAST_BACKUP_KEY)
+  if (!raw) {
+    return null
+  }
+  try {
+    const parsed = JSON.parse(raw) as Partial<BackupMeta>
+    return typeof parsed.at === 'number' &&
+      typeof parsed.count === 'number' &&
+      typeof parsed.latest === 'number' &&
+      typeof parsed.titles === 'string'
+      ? { at: parsed.at, count: parsed.count, latest: parsed.latest, titles: parsed.titles }
+      : null
+  } catch {
+    return null
+  }
+}
+
+const writeBackupMeta = (meta: BackupMeta): void => {
+  writeLocalStorage(LAST_BACKUP_KEY, JSON.stringify(meta))
+}
+
+/** FNV-1a：把会话 id + 标题滚成一个短指纹；改名也会让备份失效（宁可多备份一次） */
+const titleFingerprint = (summaries: readonly SessionSummary[]): string => {
+  let hash = 0x811c9dc5
+  const ids = summaries.map((summary) => summary.id).sort()
+  const byId = new Map(summaries.map((summary) => [summary.id, summary.title]))
+  for (const id of ids) {
+    const text = `${id}|${byId.get(id) ?? ''}`
+    for (let index = 0; index < text.length; index++) {
+      hash ^= text.charCodeAt(index)
+      hash = Math.imul(hash, 0x01000193)
+    }
+  }
+  return (hash >>> 0).toString(16)
+}
+
+const historyFingerprint = (
+  summaries: readonly SessionSummary[]
+): { count: number; latest: number; titles: string } => ({
+  count: summaries.length,
+  latest: summaries.reduce((latest, summary) => Math.max(latest, summary.updatedAt), 0),
+  titles: titleFingerprint(summaries),
+})
 
 /** 与上游 backup.ts 的 backupFileName 同风格，但精确到秒，避免同一天覆盖 */
 const backupStamp = (date: Date): string => {
@@ -219,17 +305,13 @@ const backupBeforeImport = async (report: ProgressReporter): Promise<string> => 
   })
 }
 
-/** JSON 解析失败的会话记为单条失败，不整批回滚 */
-const parseJson = async (entry: ArchiveEntry): Promise<unknown> =>
-  JSON.parse(await (await readEntry(entry)).text())
-
 /**
  * 数出归档里有多少个可读条目（不含目录项），用来算真实进度百分比。
  *
  * 【为什么不用 readArchive 数】
  * readArchive 会把每个条目**完整解压**（skipEntry 也要走 CRC 校验），
  * 为了计数再解压一遍等于让导入耗时翻倍 —— 手机上从几秒变十几秒，不能接受。
- * 归档的中央目录里本来就有全部条目，只读末尾那一段就够了。
+ * 归档的中央目录里本来就有全部条目，只读末尾那一段就够了（zipReader fork 已一次性读入）。
  */
 const countArchiveEntries = async (file: File): Promise<number | null> => {
   try {
@@ -263,7 +345,7 @@ type PendingChunk = {
  * 【为什么不能一次拿整包】
  * content:// URI 只能原生读。旧实现一次返回整个 ZIP 的 base64：31 MB 归档 →
  * 42 MB 字符串，JS 侧再 atob 成 32 MB 数组，峰值内存上百 MB；跨桥的大字符串
- * 本身也要几秒。现在每次只取 256 KB（base64 ≤ 341 KB），逐块塞进 Blob；
+ * 本身也要几秒。现在每次只取一块（0.2.5 起 1 MB，base64 ≤ 1.4 MB），逐块塞进 Blob；
  * Blob 的字节不占 JS 堆，单块数组随即回收，峰值与单块大小成正比。
  *
  * 【错误与清理】
@@ -297,7 +379,7 @@ const readPendingArchive = async (report: ProgressReporter): Promise<File | null
       if (chunk.eof || chunk.size === 0) {
         break
       }
-      // 每 256 KB 一次原生往返，块间让出主线程保持界面响应
+      // 每块一次原生往返，块间让出主线程保持界面响应
       await yieldToPaint()
     }
   } finally {
@@ -312,239 +394,381 @@ const readPendingArchive = async (report: ProgressReporter): Promise<File | null
 }
 
 /**
- * 合并导入主流程。
+ * 导入期间尽量保持屏幕常亮。
  *
- * 顺序刻意如此：
- *   1. 先校验 ZIP 格式 —— 坏文件不该触发一次全量备份（别让用户白等大文件拷贝）；
- *   2. 备份当前数据 —— 没有退路就不动数据；
- *   3. 一个 replaceHistory 事务内完成「复制现有 + 合并导入」，失败整体回滚。
+ * 【为什么需要】Android WebView 在页面不可见时会钳制定时器（`setTimeout` 最少约 1 秒）。
+ * 导入要几分钟，用户把屏幕放下/切走后再回来，进度会像「一秒一条」一样爬。
+ * Wake Lock 在 https 安全上下文可用（本 App 是 https://localhost）；拿不到就静默降级。
  */
+const keepScreenAwake = (): (() => void) => {
+  const wakeLock = (
+    navigator as Navigator & { wakeLock?: { request(type: 'screen'): Promise<WakeLockSentinelLike> } }
+  ).wakeLock
+  if (!wakeLock?.request) {
+    return () => {}
+  }
+  type WakeLockSentinelLike = {
+    release(): Promise<void>
+    addEventListener?(type: 'release', listener: () => void): void
+  }
+  let sentinel: WakeLockSentinelLike | null = null
+  let released = false
+  const request = () => {
+    void wakeLock
+      .request('screen')
+      .then((next) => {
+        if (released) {
+          void next.release().catch(() => {})
+          return
+        }
+        sentinel = next
+        next.addEventListener?.('release', () => {
+          sentinel = null
+        })
+      })
+      .catch(() => {})
+  }
+  request()
+  const onVisible = () => {
+    if (!released && document.visibilityState === 'visible' && !sentinel) {
+      request()
+    }
+  }
+  document.addEventListener('visibilitychange', onVisible)
+  return () => {
+    released = true
+    document.removeEventListener('visibilitychange', onVisible)
+    void sentinel?.release().catch(() => {})
+  }
+}
+
+/**
+ * 系统文件选择器给出的 File 在 Android 上是 content:// 流：每次 `slice().arrayBuffer()`
+ * 都会重新 open + seek，几十次小块读会退化成 O(n²) 的 provider 读取。
+ * 真机实测：32 MB 归档光「跳过已导入」就花 36 秒。这里一次性读进内存，
+ * 之后所有切片都在内存 Blob 上，解析才回到正常速度。
+ *
+ * 上限与原生读取一致（48 MB）；超过上限维持原 File（原生分块读取路径本来就拼成了内存 Blob）。
+ */
+const MATERIALIZE_LIMIT = 48 * 1024 * 1024
+
+const materializeArchive = async (file: File, report: ProgressReporter): Promise<File> => {
+  if (file.size === 0 || file.size > MATERIALIZE_LIMIT) {
+    return file
+  }
+  report({ phase: '正在读取导入文件', done: null, total: file.size })
+  const buffer = await file.arrayBuffer()
+  return new File([buffer], file.name, { type: 'application/zip' })
+}
+
+/** 合并导入主流程。 */
 export const mergeImport = async (
   file: File,
   onProgress?: ProgressReporter
 ): Promise<MergeResult> => {
   const report: ProgressReporter = onProgress ?? (() => {})
-
-  // 1. 格式校验（上游实现，含 manifest 版本检查）
-  report({ phase: '正在检查文件格式', done: null, total: null })
-  await checkArchiveFormat(file)
-
-  // 2. 备份（仅原生壳；浏览器里交给上游原来的覆盖式导入）
-  //    这一步在大归档上也要几秒，必须单独报，否则用户会以为卡在校验
-  report({
-    phase: isNativeShell() ? '正在备份本机现有会话' : '正在准备导入',
-    done: null,
-    total: null,
-  })
-  const backupPath = isNativeShell() ? await backupBeforeImport(report) : null
+  const startedAt = performance.now()
+  const releaseWakeLock = keepScreenAwake()
 
   const result: MergeResult = {
     added: 0,
     updated: 0,
     skipped: 0,
     failed: 0,
-    backupPath,
+    backupPath: null,
+    backupSkipped: null,
     errors: [],
+    parsed: 0,
+    skippedFast: 0,
+    timing: { read: 0, check: 0, parse: 0, backup: 0, commit: 0, total: 0 },
   }
+
+  // 账本在 try 之外读/写：成功才写（finally 里不写，异常会直接抛出去）。
   const ledger = readLedger()
-  /** 现有会话 id → updatedAt，用来判断「导入的这份是不是更新的」 */
-  const existing = new Map<string, number>()
-  for (const summary of await db.loadSessionSummaries()) {
-    existing.set(summary.id, summary.updatedAt)
-  }
-  /** 本次真正写进暂存的会话 id —— 只有它们引用的图片才需要保存 */
-  const kept = new Set<string>()
-  /** 被保留会话引用的 ZIP 条目名 → 附件 id */
-  const images = new Map<string, string>()
-  /** 已写入暂存的附件 id → 嗅探到的 MIME，同一张图在多个会话目录出现时只写一次 */
-  const sniffed = new Map<string, string>()
 
-  /** 本次真正写进暂存、且带图片的会话 id —— 只给它们回填 MIME */
-  const imageOwners = new Set<string>()
-  /** 暂存会话批写缓冲：满 SESSION_BATCH_SIZE 条提交一次 */
-  const sessionBatch: Session[] = []
-  /** 图片批写缓冲：条数或字节数到上限就提交，避免大批量图片把内存顶上去 */
-  const imageBatch: { id: string; blob: Blob }[] = []
-  let imageBatchBytes = 0
+  try {
+    // 1. 先把归档读进内存（content:// 流不能反复 slice，见 materializeArchive）。
+    const readStart = performance.now()
+    const archive = await materializeArchive(file, report)
+    result.timing.read = Math.round(performance.now() - readStart)
 
-  await replaceHistory(async () => {
-    // 3.1 并集的底：把现有正式数据整体复制进暂存
-    report({ phase: '正在备份本机现有会话', done: null, total: null })
-    await db.stageCurrentHistory()
+    // 2. 格式校验（上游实现，含 manifest 版本检查）。目录只读一次，后续全都命中缓存。
+    report({ phase: '正在检查文件格式', done: null, total: null })
+    const checkStart = performance.now()
+    await checkArchiveFormat(archive)
+    const checkEnd = performance.now()
 
-    /**
-     * 提交当前会话批次并让出一帧。
-     * 【为什么写库失败必须抛出去】暂存写失败说明存储层有问题（配额/IO），
-     * 不能当成「这条会话坏了」跳过 —— 那会在用户不知情时吞掉数据。
-     */
-    const flushSessions = async () => {
-      if (sessionBatch.length === 0) {
-        return
-      }
-      const batch = sessionBatch.splice(0, sessionBatch.length)
-      await db.putStagingSessions(batch)
-      await yieldToPaint()
+    // 2. 先读摘要：既用于「本机有没有这条」，也用于判断「上次备份后数据有没有变」。
+    const summaries = await db.loadSessionSummaries()
+    /** 现有会话 id → updatedAt，用来判断「导入的这份是不是更新的」 */
+    const existing = new Map<string, number>()
+    for (const summary of summaries) {
+      existing.set(summary.id, summary.updatedAt)
     }
+    const fingerprint = historyFingerprint(summaries)
+    const lastBackup = readBackupMeta()
+    /** 本机数据与上次成功备份一致 → 这份备份可以直接复用 */
+    const backupReusable =
+      lastBackup !== null &&
+      lastBackup.count === fingerprint.count &&
+      lastBackup.latest === fingerprint.latest &&
+      lastBackup.titles === fingerprint.titles
 
-    /** 提交当前图片批次并让出一帧 */
-    const flushImages = async () => {
-      if (imageBatch.length === 0) {
-        return
-      }
-      const batch = imageBatch.splice(0, imageBatch.length)
-      imageBatchBytes = 0
-      await db.saveStagingFiles(batch)
-      await yieldToPaint()
-    }
+    /** 本次真正写进暂存的会话 id —— 只有它们引用的图片才需要保存 */
+    const kept = new Set<string>()
+    /** 被保留会话引用的 ZIP 条目名 → 附件 id */
+    const images = new Map<string, string>()
+    /** 已写入暂存的附件 id → 嗅探到的 MIME，同一张图在多个会话目录出现时只写一次 */
+    const sniffed = new Map<string, string>()
+    /** 本次真正写进暂存、且带图片的会话 id —— 只给它们回填 MIME */
+    const imageOwners = new Set<string>()
+    /** 暂存会话批写缓冲：满 SESSION_BATCH_SIZE 条提交一次 */
+    const sessionBatch: Session[] = []
+    /** 图片批写缓冲：条数或字节数到上限就提交，避免大批量图片把内存顶上去 */
+    const imageBatch: { id: string; blob: Blob }[] = []
+    let imageBatchBytes = 0
+    /** 本批次里实际解压 + 解析的会话数（进度条用真实数据说话） */
+    let parsed = 0
+    let skippedFast = 0
 
-    // 3.2 逐条读 ZIP
-    //    归档的目录表能给出精确的条目总数（含图片），所以进度是真实百分比，
-    //    而不是「假装动一下」的不确定动画。总数拿不到时退化为「已处理 N 条」。
-    const archiveTotal = await countArchiveEntries(file)
-    let processed = 0
-    let manifest = false
-    let sawIndex = false
-    let sawSession = false
-    const tick = (phase: string) => {
-      processed += 1
-      report({ phase, done: processed, total: archiveTotal })
-    }
-    report({ phase: '正在读取归档目录', done: 0, total: archiveTotal })
-    for await (const entry of readArchive(file)) {
-      const { path } = entry
+    const parseStart = performance.now()
+    await replaceHistory(
+      async () => {
+        /**
+         * 提交当前会话批次并让出主线程。
+         * 【为什么写库失败必须抛出去】暂存写失败说明存储层有问题（配额/IO），
+         * 不能当成「这条会话坏了」跳过 —— 那会在用户不知情时吞掉数据。
+         */
+        const flushSessions = async () => {
+          if (sessionBatch.length === 0) {
+            return
+          }
+          const batch = sessionBatch.splice(0, sessionBatch.length)
+          await db.putStagingSessions(batch)
+          await yieldToPaint()
+        }
 
-      if (!manifest) {
-        if (path !== MANIFEST_PATH) {
+        /** 提交当前图片批次并让出主线程 */
+        const flushImages = async () => {
+          if (imageBatch.length === 0) {
+            return
+          }
+          const batch = imageBatch.splice(0, imageBatch.length)
+          imageBatchBytes = 0
+          await db.saveStagingFiles(batch)
+          await yieldToPaint()
+        }
+
+        // 归档的目录表能给出精确的条目总数（含图片），进度是真实百分比。
+        // 总数拿不到时退化为「已处理 N 条」。
+        const archiveTotal = await countArchiveEntries(archive)
+        let processed = 0
+        let manifest = false
+        let sawIndex = false
+        let sawSession = false
+        const tick = (phase: string) => {
+          processed += 1
+          report({ phase, done: processed, total: archiveTotal, skipped: skippedFast })
+        }
+        report({ phase: '正在读取归档目录', done: 0, total: archiveTotal })
+
+        for await (const entry of readArchive(archive)) {
+          const { path } = entry
+
+          if (!manifest) {
+            if (path !== MANIFEST_PATH) {
+              throw new BackupError('backupUnrecognized')
+            }
+            checkManifest(JSON.parse(new TextDecoder().decode(await readEntryBytes(entry))))
+            manifest = true
+            tick('正在校验归档')
+            continue
+          }
+
+          // user.json 是脱敏的账号信息，本来就不导入
+          if (path === USER_PATH && !sawIndex && !sawSession) {
+            await skipEntry(entry)
+            tick('正在解析会话')
+            continue
+          }
+
+          const sessionId = parseSessionPath(path)
+          if (sessionId !== null) {
+            // 账本 v2：同一份条目内容（id + CRC + 大小）已经成功导入过、且本机还有这条
+            // 会话 → 不需要解压、不需要解析、不需要写库。这是重复导入的主路径。
+            const known = existing.get(sessionId)
+            if (ledger[`${sessionId}|${entry.crc}|${entry.size}`] && known !== undefined) {
+              await entry.discard()
+              result.skipped += 1
+              skippedFast += 1
+              tick('正在跳过已导入会话')
+              continue
+            }
+
+            // 解析与分类放在 try 里：单条会话数据坏了只记 failed，不整批回滚。
+            // 【注意】写暂存刻意留在 try 外面：写库失败必须中止整个导入，
+            // 不能被误判成「这一条会话坏了」然后继续。
+            let session: Session | undefined
+            let sessionImages: Map<string, string> | undefined
+            try {
+              const bytes = await readEntryBytes(entry)
+              const parsedFile = readSessionFile(JSON.parse(new TextDecoder().decode(bytes)))
+              // 文件名与内容 id 不一致属于归档损坏，不是「这一条跳过」能解决的
+              if (parsedFile.id !== sessionId) {
+                throw new Error(`会话 id 不一致：文件名 ${sessionId}，内容 ${parsedFile.id}`)
+              }
+              const local = toLocalSession(parsedFile)
+              parsed += 1
+              if (known !== undefined && local.session.updatedAt <= known) {
+                // 本机这份不比导入的旧 → 留本机，绝不拿旧内容覆盖用户正在用的会话
+                result.skipped += 1
+                tick('正在解析会话')
+                continue
+              }
+              session = local.session
+              sessionImages = local.images
+            } catch (error) {
+              // ZIP 结构坏了要整批回滚；单条会话数据坏了只跳这一条
+              if (error instanceof ArchiveError) {
+                throw error
+              }
+              result.failed += 1
+              if (result.errors.length < 5) {
+                result.errors.push(`${sessionId}: ${(error as Error).message}`)
+              }
+              tick('正在写入本机会话')
+              continue
+            }
+            if (session === undefined || sessionImages === undefined) {
+              // 不可达：上面的 catch 分支已经 continue；这里只是让类型收窄
+              continue
+            }
+            sessionBatch.push(session)
+            if (sessionBatch.length >= SESSION_BATCH_SIZE) {
+              await flushSessions()
+            }
+            sawSession = true
+            kept.add(session.id)
+            if (sessionImages.size > 0) {
+              imageOwners.add(session.id)
+            }
+            for (const [imagePath, id] of sessionImages) {
+              images.set(imagePath, id)
+            }
+            // 只记录「真正写进库」的条目；被 updatedAt 跳过的不能记，否则会把本机较新的
+            // 内容挡在后续导入之外。
+            ledger[`${session.id}|${entry.crc}|${entry.size}`] = true
+            if (known === undefined) {
+              result.added += 1
+            } else {
+              result.updated += 1
+            }
+            // 写库是整条流水线里最慢的一步，放在这里报进度最贴近真实感受
+            tick('正在写入本机会话')
+            continue
+          }
+
+          if (path === INDEX_PATH && !sawIndex) {
+            // 只做格式校验；合并模式下 index 不再需要与导入集合一一对应
+            readSessionIndex(JSON.parse(new TextDecoder().decode(await readEntryBytes(entry))))
+            sawIndex = true
+            tick('正在校验归档')
+            continue
+          }
+
+          // 剩下的是图片。只保存「被保留的会话」引用到的那些；其余读完丢弃（也要消耗流）。
+          const owner = /^chat_sessions\/([^/]+)_files\//.exec(path)?.[1]
+          const id = owner !== undefined && kept.has(owner) ? images.get(path) : undefined
+          if (id === undefined || sniffed.has(id)) {
+            await skipEntry(entry)
+            tick('正在处理附件')
+            continue
+          }
+          const data = await readEntryBytes(entry)
+          const mimeType = imageType(data.subarray(0, 16))
+          imageBatch.push({ id, blob: new Blob([data as Uint8Array<ArrayBuffer>], { type: mimeType }) })
+          imageBatchBytes += data.length
+          sniffed.set(id, mimeType)
+          if (imageBatch.length >= IMAGE_BATCH_COUNT || imageBatchBytes >= IMAGE_BATCH_BYTES) {
+            await flushImages()
+          }
+          tick('正在保存图片附件')
+        }
+
+        // 收尾：把最后不足一批的会话与图片写进去
+        await flushSessions()
+        await flushImages()
+
+        if (!manifest) {
           throw new BackupError('backupUnrecognized')
         }
-        checkManifest(await parseJson(entry))
-        manifest = true
-        tick('正在校验归档')
-        continue
-      }
 
-      // user.json 是脱敏的账号信息，本来就不导入
-      if (path === USER_PATH && !sawIndex && !sawSession) {
-        await skipEntry(entry)
-        tick('正在解析会话')
-        continue
-      }
+        // 回填附件 MIME：只改「本次新写入、且带图片」的暂存会话。
+        // 现有会话不会进暂存，不存在被清空 MIME 的风险。
+        if (sniffed.size > 0) {
+          await db.updateStagingImageTypes(sniffed, [...imageOwners])
+        }
 
-      const sessionId = parseSessionPath(path)
-      if (sessionId !== null) {
-        // 解析与分类放在 try 里：单条会话数据坏了只记 failed，不整批回滚。
-        // 【注意】写暂存刻意留在 try 外面：写库失败必须中止整个导入，
-        // 不能被误判成「这一条会话坏了」然后继续。
-        let session: Session | undefined
-        let sessionImages: Map<string, string> | undefined
-        try {
-          const text = await (await readEntry(entry)).text()
-          const parsed = readSessionFile(JSON.parse(text))
-          // 文件名与内容 id 不一致属于归档损坏，不是「这一条跳过」能解决的
-          if (parsed.id !== sessionId) {
-            throw new Error(`会话 id 不一致：文件名 ${sessionId}，内容 ${parsed.id}`)
-          }
-          const local = toLocalSession(parsed)
-          if (ledger[fingerprint(local.session)]) {
-            result.skipped += 1
-            tick('正在解析会话')
-            continue
-          }
-          const known = existing.get(local.session.id)
-          if (known !== undefined && local.session.updatedAt <= known) {
-            // 本机这份不比导入的旧 → 留本机，绝不拿旧内容覆盖用户正在用的会话
-            result.skipped += 1
-            tick('正在解析会话')
-            continue
-          }
-          session = local.session
-          sessionImages = local.images
-        } catch (error) {
-          // ZIP 结构坏了要整批回滚；单条会话数据坏了只跳这一条
-          if (error instanceof ArchiveError) {
-            throw error
-          }
-          result.failed += 1
-          if (result.errors.length < 5) {
-            result.errors.push(`${sessionId}: ${(error as Error).message}`)
-          }
-          tick('正在写入本机会话')
-          continue
-        }
-        if (session === undefined || sessionImages === undefined) {
-          // 不可达：上面的 catch 分支已经 continue；这里只是让类型收窄
-          continue
-        }
-        sessionBatch.push(session)
-        if (sessionBatch.length >= SESSION_BATCH_SIZE) {
-          await flushSessions()
-        }
-        sawSession = true
-        kept.add(session.id)
-        if (sessionImages.size > 0) {
-          imageOwners.add(session.id)
-        }
-        for (const [imagePath, id] of sessionImages) {
-          images.set(imagePath, id)
-        }
-        ledger[fingerprint(session)] = true
-        const known = existing.get(session.id)
-        if (known === undefined) {
-          result.added += 1
+        // 解析结束。现在才决定要不要备份 —— 只有确实要写正式表时才付这笔钱。
+        const parseEnd = performance.now()
+        result.timing.parse = Math.round(parseEnd - parseStart)
+
+        if (!isNativeShell()) {
+          // 浏览器 / PWA 没有写 Documents 的能力，也走不到合并导入；测试里直接调用
+          // mergeImport 时同样跳过备份（与 0.2.4 的 isNativeShell 分支一致）。
+          result.backupSkipped = 'disabled'
+        } else if (!isAutoBackupEnabled()) {
+          result.backupSkipped = 'disabled'
+        } else if (summaries.length === 0) {
+          result.backupSkipped = 'empty'
+        } else if (result.added + result.updated === 0) {
+          result.backupSkipped = 'nothing'
+        } else if (backupReusable) {
+          result.backupSkipped = 'unchanged'
         } else {
-          result.updated += 1
+          report({ phase: '正在备份本机现有会话', done: null, total: null })
+          const backupStart = performance.now()
+          result.backupPath = await backupBeforeImport(report)
+          result.timing.backup = Math.round(performance.now() - backupStart)
+          writeBackupMeta({
+            at: Date.now(),
+            count: fingerprint.count,
+            latest: fingerprint.latest,
+            titles: fingerprint.titles,
+          })
         }
-        // 写库是整条流水线里最慢的一步，放在这里报进度最贴近真实感受
-        tick('正在写入本机会话')
-        continue
-      }
-
-      if (path === INDEX_PATH && !sawIndex) {
-        // 只做格式校验；合并模式下 index 不再需要与导入集合一一对应
-        readSessionIndex(await parseJson(entry))
-        sawIndex = true
-        tick('正在校验归档')
-        continue
-      }
-
-      // 剩下的是图片。只保存「被保留的会话」引用到的那些；其余读完丢弃（也要消耗流）。
-      const owner = /^chat_sessions\/([^/]+)_files\//.exec(path)?.[1]
-      const id = owner !== undefined && kept.has(owner) ? images.get(path) : undefined
-      if (id === undefined || sniffed.has(id)) {
-        await skipEntry(entry)
-        tick('正在处理附件')
-        continue
-      }
-      const data = await readEntry(entry)
-      const mimeType = imageType(new Uint8Array(await data.slice(0, 16).arrayBuffer()))
-      imageBatch.push({ id, blob: new Blob([data], { type: mimeType }) })
-      imageBatchBytes += data.size
-      sniffed.set(id, mimeType)
-      if (imageBatch.length >= IMAGE_BATCH_COUNT || imageBatchBytes >= IMAGE_BATCH_BYTES) {
-        await flushImages()
-      }
-      tick('正在保存图片附件')
-    }
-
-    // 收尾：把最后不足一批的会话与图片写进去
-    await flushSessions()
-    await flushImages()
-
-    if (!manifest) {
-      throw new BackupError('backupUnrecognized')
-    }
-
-    // 3.3 回填附件 MIME：只改「本次新写入、且带图片」的暂存会话。
-    //     现有会话是整条复制进暂存的，MIME 原样保留，不需要也不应该再全量扫一遍
-    //     （旧实现 getAll 593 条会话重读 35 MB JSON，是内存峰值 225 MB 的主因）。
-    if (sniffed.size > 0) {
-      await db.updateStagingImageTypes(sniffed, [...imageOwners])
-    }
-  })
+        report({ phase: '正在写入本机数据库', done: null, total: null })
+      },
+      // 增量提交：只把本次导入写进正式表，不清空、不复制现有数据。
+      db.commitMergeStaging
+    )
+    result.timing.check = Math.round(checkEnd - checkStart)
+    result.parsed = parsed
+    result.skippedFast = skippedFast
+  } finally {
+    releaseWakeLock()
+    result.timing.total = Math.round(performance.now() - startedAt)
+    result.timing.commit = Math.max(
+      0,
+      result.timing.total - result.timing.check - result.timing.parse - result.timing.backup
+    )
+    const profile = { ...result.timing, added: result.added, updated: result.updated, skipped: result.skipped, skippedFast: result.skippedFast, parsed: result.parsed }
+    window.__IMPORT_PROFILE__ = profile
+    // Capacitor 会把 WebView 的 console 转发到 logcat（tag Capacitor/Console），
+    // 真机排查「到底慢在哪」直接筛 [import-perf] 即可。
+    // eslint-disable-next-line no-console
+    console.info('[import-perf]', JSON.stringify(profile))
+  }
 
   writeLedger(ledger)
   return result
 }
+
+/** 暴露给测试/诊断：账本当前条数与最近一次备份时间 */
+export const importDiagnostics = (): { ledger: number; lastBackup: BackupMeta | null } => ({
+  ledger: Object.keys(readLedger()).length,
+  lastBackup: readBackupMeta(),
+})
 
 /**
  * 装到 window 上，供上游 `backup.ts` 的补丁判断「有没有原生合并导入可用」。
@@ -607,7 +831,7 @@ export const consumePendingFile = async (): Promise<void> => {
     if (!pending.pending) {
       return
     }
-    // 31 MB 归档分 129 块读回来，每块一次 IPC —— 必须全程有进度，
+    // 31 MB 归档分块读回来，每块一次 IPC —— 必须全程有进度，
     // 否则用户看到的还是「点了没反应」。
     const progress = showImportProgress({ phase: '正在读取导入文件', done: null, total: null })
     try {

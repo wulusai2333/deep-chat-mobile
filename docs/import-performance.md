@@ -198,7 +198,7 @@ Blob 字节不进 JS 堆。
 node scripts/prepare-web.mjs                 # 重放补丁 → web/src
 node scripts/sync-native.mjs                 # native/ → android/（写入 1 个文件）
 npx tsc -p web/tsconfig.json --noEmit        # 通过
-pnpm test:import                             # 43/43 passed
+pnpm test:import                             # 55/55 passed
 node scripts/real-zip-probe.mjs "<真实 zip>"  # 593 added / failed 0 / 81 图入库
 ```
 
@@ -256,3 +256,55 @@ node scripts/real-zip-probe.mjs "<真实 zip>"  # 593 added / failed 0 / 81 图�
    需要注意别退化成 O(n²)。
 7. **桌面端不受影响**：浏览器 / PWA 没有原生桥，仍走上游的覆盖式导入；本次改动只在
    `isNativeShell()` 为真的 APK 路径生效。
+
+## 9. 0.2.5：合并提交、账本 v2 与按需备份
+
+0.2.1 的优化把导入从「闪退 + 分钟级」压到桌面 3.2 s，但真机仍然慢：前面的校验要等很久，
+随后大约「一秒一条」。0.2.5 又做了五处改动，完整理由见
+[`../patches/import-speed.md`](../patches/import-speed.md)。
+
+| 变化 | 说明 |
+| --- | --- |
+| 中央目录整读 | 677 条目 × 3~4 次小块读 → 1 次整读；`checkArchiveFormat` 444 ms → **14 ms** |
+| 条目头整读 | 本地头 + 文件名一次读，`extra` 非空才再读 |
+| 会话字节直读 | 新增 `readEntryBytes()`，不再为每条会话造 8 KB Blob 串 |
+| 增量提交 | `commitMergeStaging()` 只写「本次导入」，不再复制并集 / 清空正式表 |
+| 账本 v2 | 键改为 `id\|CRC\|大小`，命中即 `discard()`（不 inflate、不 parse、不写库） |
+| 备份按需 | 先解析再决定备份；本机无会话/无新增/上次备份后数据未变/用户关闭 → 跳过 |
+| 备份批量读 | 600 次 `loadSession` 单条事务 → 约 24 个批量事务 |
+| 1 MB 分块 | 备份上传/外部文件读取的桥往返少 4 倍 |
+| 让帧 + 常亮 | `MessageChannel` 让出（后台不被钳到 1 s）+ `navigator.wakeLock` |
+| 进度 UI | 去掉全屏 `backdrop-filter`、更新限频 12 Hz、结果显示阶段耗时 |
+
+同一归档（31.3 MB / 677 条目 / 593 会话 / 81 图）在桌面无头 Chrome 的前后对比：
+
+| 指标 | 0.2.4 | 0.2.5 |
+| --- | --- | --- |
+| 格式校验 | 444 ms | 14 ms |
+| 空库导入 593 条 | 3218 / 3255 ms | 3206 / 3244 ms |
+| 已有 593 条时重复导入（全部已导入过） | 7967 / 8205 ms | 917 / 950 ms |
+| 重复导入实际解压解析的会话数 | 593 | 0 |
+| 峰值 JS heap | 85.2–102.6 MB | 73.6 MB |
+
+空库导入没有明显变快：它的时间主要花在解压 + `JSON.parse` + 严格校验 + 树重建上，
+这部分是数据完整性检查，0.2.5 没有砍。重复导入（用户最常遇到的场景）从 8.2 s 降到 0.95 s。
+
+### 9.1 真机实测（HONOR BVL-AN16 / HarmonyOS 4.3 / API 32，同一 32.8 MB 归档）
+
+| 场景 | 0.2.5 中间版本 | 0.2.5 最终 | 组成（最终） |
+| --- | --- | --- | --- |
+| 空库首次导入 593 条 | 42.9 s | **4.1 s** | 读取 126 ms + 校验 27 ms + 解析 2.9 s + 写入 1.2 s |
+| 已有 593 条时重复导入 | 36.3 s | **1.6 s** | 读取 112 ms + 校验 41 ms + 解析 1.5 s + 写入 0.14 s |
+
+「中间版本」指已经做了账本 v2 / 增量提交，但还没加「一次性读入内存」的构建。第二轮的 36 s
+全部花在跳过已导入会话上，暴露出真正的大头：**Android 文件选择器给的是 `content://` 流，
+每次 `File.slice().arrayBuffer()` 都会重新 open + seek，几十次小块读退化成 O(n²) 的
+provider 读取**。现在先一次性读入内存（`materializeArchive`，≤ 48 MB），同样的跳过降到 1.5 s。
+
+这三个数字都来自应用自己的 `[import-perf]` 日志，可以在 `adb logcat -s Capacitor/Console`
+里复现；结果页也会显示同样的阶段耗时。
+
+真机上的阶段耗时由导入结果页直接显示（校验 / 解析 / 备份 / 写入），也可以从
+`adb logcat -s Capacitor/Console` 里筛 `[import-perf]` 拿到同样的 JSON —— 排查「慢在哪」
+不需要再连电脑调试 WebView。
+

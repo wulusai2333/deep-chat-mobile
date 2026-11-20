@@ -468,50 +468,93 @@ if (typeof window !== 'undefined') {
   for (const [user] of getContextRounds(request.history).slice().reverse()) {`
   )
 
+  // ── 补丁 5b：replaceHistory 支持自定义提交函数 ──────────────────────────────
+  // 上游只在覆盖语义下使用：先写暂存，再 commitStaging（清空正式表 → 搬入）。
+  // 合并导入需要一个「不清空正式表」的增量提交，同时复用 replaceHistory 的全部
+  // 状态管理（停止生成、等落盘、清空缓存、失败恢复……）。这里只加一个可选参数，
+  // 不传时行为与上游完全一致（所有上游调用点都不传）。
+  replaceOnce(
+    'src/services/chat/store.ts',
+    'mobile-shell: replace history commit',
+    'export const replaceHistory = async (write: () => Promise<void>): Promise<number> => {',
+    `// mobile-shell: replace history commit —— 第二参默认是上游覆盖式提交；合并导入传增量提交
+export const replaceHistory = async (
+  write: () => Promise<void>,
+  commit: () => Promise<SessionSummary[]> = db.commitStaging
+): Promise<number> => {`
+  )
+
+  replaceOnce(
+    'src/services/chat/store.ts',
+    'mobile-shell: replace history commit call',
+    '      summaries = await db.commitStaging()',
+    `      // mobile-shell: replace history commit call —— 合并导入传增量提交，其余调用走默认参数
+      summaries = await commit()`
+  )
+
   // ── 补丁 5：db.ts 增加合并导入所需的暂存辅助函数 ──────────────────────────
   // 上游 commitStaging 是「清空正式表 → 从暂存搬入」，暂存里必须是完整目标状态。
-  // 想复用它的原子性做「合并」，就得先把现有数据复制进暂存，让暂存成为并集。
+  // 合并导入为了保持原子性，曾经先把本机全部数据复制进暂存（并集），再整体搬回；
+  // 真机实测这一次导入要多写 2~3 倍数据。现在改为 commitMergeStaging：只把本次
+  // 导入的会话/原件 put 进正式表，不清空正式表；仍是一个事务，失败整体回滚。
   // 详见 patches/db.merge.ts 的文件头。
   //
-  // 用 upsertBlock 而不是 insertOnce：本轮把 collectStagingFileTypes 从
-  // getAll 改成游标遍历、新增 putStagingSessions 批量写，补丁内容必须能在
-  // 已经打过旧补丁的 web/ 上更新，否则旧实现会一直留在那里。
+  // 用 upsertBlock 而不是 insertOnce：补丁内容需要在已经打过旧补丁的 web/ 上更新，
+  // 否则旧实现（含 stageCurrentHistory）会一直留在那里。
   const MERGE_HELPERS_START =
     '// ── mobile-shell: merge staging helpers ────────────────────────────────────'
   const MERGE_HELPERS_END =
     '// ── mobile-shell: merge staging helpers end ────────────────────────────────'
   const MERGE_HELPERS = `${MERGE_HELPERS_START}
-// 合并导入需要把「现有数据 + 导入数据」的并集交给 commitStaging，
-// 但上游只提供了 add 语义的 addStagingSession 和清空用的 clearStaging。
-// 这里新增辅助函数，全部只服务合并导入，不改变任何既有函数的行为。
-// 完整说明见 patches/db.merge.ts。
-export const stageCurrentHistory = async (): Promise<void> => {
+// 合并导入的辅助函数，全部只服务合并导入，不改变任何既有函数的行为。
+// 完整说明见 patches/db.merge.ts 与 patches/import-speed.md。
+/**
+ * 合并提交：把暂存里的「本次导入」写入正式表，再清空暂存。
+ *
+ * 【与上游 commitStaging 的区别】
+ * commitStaging 是「覆盖」语义：先 clear 正式表，再把暂存整体搬回。合并导入如果
+ * 复用它，暂存里就必须是「本机现有 + 导入」的并集 —— 那等于每次导入都先把本机
+ * 全量复制一遍、结束再全量搬回，写入量是本机数据 ×2 + 导入数据 ×1。真机上这就是
+ * 分钟级耗时的主因之一。
+ *
+ * 这里改成增量：只 put 导入的会话与原件，不清空正式表。仍然是**同一个事务**，
+ * 失败时 abort 整体回滚（正式数据不变），原子性与上游一致。
+ * 提交完成后从库里读回完整摘要列表，保证调用方的内存列表不会丢掉现有会话。
+ */
+export const commitMergeStaging = async (): Promise<SessionSummary[]> => {
   const db = await getDB()
-  const tx = db.transaction(['sessions', 'files', 'sessionsStaging', 'filesStaging'], 'readwrite')
+  const tx = db.transaction(
+    ['sessions', 'sessionSummaries', 'files', 'sessionsStaging', 'filesStaging'],
+    'readwrite'
+  )
   try {
-    const stagingSessions = tx.objectStore('sessionsStaging')
-    const stagingFiles = tx.objectStore('filesStaging')
-    await stagingSessions.clear()
-    await stagingFiles.clear()
+    const sessions = tx.objectStore('sessions')
+    const summaries = tx.objectStore('sessionSummaries')
     for (
-      let cursor = await tx.objectStore('sessions').openCursor();
+      let cursor = await tx.objectStore('sessionsStaging').openCursor();
       cursor;
       cursor = await cursor.continue()
     ) {
-      await stagingSessions.put(cursor.value)
+      const session = cursor.value as Session
+      await sessions.put(session)
+      await summaries.put(storedSummary(session))
     }
     for (
-      let cursor = await tx.objectStore('files').openCursor();
+      let cursor = await tx.objectStore('filesStaging').openCursor();
       cursor;
       cursor = await cursor.continue()
     ) {
-      await stagingFiles.put(cursor.value)
+      await tx.objectStore('files').put(cursor.value)
     }
+    await tx.objectStore('sessionsStaging').clear()
+    await tx.objectStore('filesStaging').clear()
   } catch (error) {
+    // 同步抛出的错误不会让事务自动回滚，需显式中止，避免只提交一部分。
     abortTransaction(tx)
     throw error
   }
   await tx.done
+  return loadSessionSummaries()
 }
 
 /**
@@ -616,6 +659,38 @@ export const collectStagingFileTypes = async (): Promise<Map<string, string>> =>
   await tx.done
   return types
 }
+
+/**
+ * 批量读会话：一个事务里把所有 get 都发出去。
+ *
+ * 【为什么需要】导出备份时对 593 条会话逐条 loadSession 就是 593 个只读事务，
+ * 真机上每个事务都要过一次 IDB 的调度与落盘确认；按 25 条一批后只剩约 24 个。
+ * 只读事务里同步发出全部请求，不会中途 commit（请求队列非空）。
+ */
+export const loadSessionsBatch = async (
+  ids: readonly string[]
+): Promise<(Session | undefined)[]> => {
+  if (ids.length === 0) {
+    return []
+  }
+  const tx = (await getDB()).transaction('sessions', 'readonly')
+  const sessions = await Promise.all(ids.map((id) => tx.store.get(id)))
+  await tx.done
+  return sessions
+}
+
+/** 批量读原件（图片）；与 loadSessionsBatch 同样的批处理理由。 */
+export const loadFilesBatch = async (
+  ids: readonly string[]
+): Promise<(StoredFile | undefined)[]> => {
+  if (ids.length === 0) {
+    return []
+  }
+  const tx = (await getDB()).transaction('files', 'readonly')
+  const files = await Promise.all(ids.map((id) => tx.store.get(id)))
+  await tx.done
+  return files
+}
 ${MERGE_HELPERS_END}
 `
   upsertBlock(
@@ -716,22 +791,38 @@ export const exportHistorySnapshot = async (
   const { sessions, sessionCache } = useChatStore.getState()
   const total = sessions.length
   let done = 0
+  // mobile-shell: batched reads —— 逐条 loadSession 是 593 个只读事务；
+  // 真机上每个事务都要过一次 IDB 调度。按 25 条一批后约 24 个事务。
+  const READ_BATCH = 25
   async function* readSessions(): AsyncGenerator<Session> {
-    for (const summary of sessions) {
-      const session = Object.hasOwn(sessionCache, summary.id)
-        ? sessionCache[summary.id]
-        : await db.loadSession(summary.id)
-      if (!session) {
-        throw new Error(\`History session disappeared during export: \${summary.id}\`)
+    for (let start = 0; start < sessions.length; start += READ_BATCH) {
+      const batch = sessions.slice(start, start + READ_BATCH)
+      const missing = batch.filter((summary) => !Object.hasOwn(sessionCache, summary.id))
+      const loaded =
+        missing.length > 0 ? await db.loadSessionsBatch(missing.map((summary) => summary.id)) : []
+      const byId = new Map<string, Session>()
+      for (const [index, summary] of missing.entries()) {
+        const session = loaded[index]
+        if (session) {
+          byId.set(summary.id, session)
+        }
       }
-      // 详情读取期间可能重命名，归档标题与开始时的列表保持一致。
-      yield { ...session, ...summary }
-      // yield 之后才计数：此刻 exportArchive 已经处理完这条（含图片原件）
-      done += 1
-      if (done % 8 === 0) {
-        await new Promise((resolve) => setTimeout(resolve, 0))
+      for (const summary of batch) {
+        const session = Object.hasOwn(sessionCache, summary.id)
+          ? sessionCache[summary.id]
+          : byId.get(summary.id)
+        if (!session) {
+          throw new Error(\`History session disappeared during export: \${summary.id}\`)
+        }
+        // 详情读取期间可能重命名，归档标题与开始时的列表保持一致。
+        yield { ...session, ...summary }
+        // yield 之后才计数：此刻 exportArchive 已经处理完这条（含图片原件）
+        done += 1
+        if (done % 8 === 0) {
+          await new Promise((resolve) => setTimeout(resolve, 0))
+        }
+        onProgress?.(done, total)
       }
-      onProgress?.(done, total)
     }
   }
   const { exportArchive } = await import('./history/exportArchive.js')
@@ -846,80 +937,12 @@ export const exportHistory = (
   }`
   )
 
-  // ── 补丁 19：导出「条目总数」查询，供导入进度使用 ────────────────────────────
-  // 【为什么需要】导入大归档要几分钟，期间必须给出百分比进度，
-  // 否则用户以为卡死。readArchive 是流式的，不告诉调用方还剩多少；
-  // 而中央目录里本来就有全部条目，数一遍只需读文件末尾一段，
-  // 不会像「再解压一遍来计数」那样让导入耗时翻倍。
-  replaceOnce(
-    'src/services/chat/history/zipReader.ts',
-    'mobile-shell: count zip entries',
-    `export async function* readArchive(file: File): AsyncGenerator<ArchiveEntry> {
-  const directory = await readDirectory(file)`,
-    `/**
- * mobile-shell: count zip entries —— 只读中央目录，返回可读条目数（不含目录项）。
- *
- * 供导入进度计算百分比用。只解析目录、不解压任何条目，
- * 因此在 30 MB 级别的归档上也只是读末尾几十 KB。
- */
-export const countZipEntries = async (file: File): Promise<number> => {
-  const directory = await readDirectory(file)
-  return directory.entries.filter((entry) => !entry.path.endsWith('/')).length
-}
-
-export async function* readArchive(file: File): AsyncGenerator<ArchiveEntry> {
-  const directory = await readDirectory(file)`
-  )
-
-  // ── 补丁 19b：中央目录只解析一次 ─────────────────────────────────────────────
-  // 导入流程会对同一个 File 解析三遍目录：
-  //   checkArchiveFormat()（校验 manifest）→ countZipEntries()（进度总数）→ readArchive()（正式遍历）。
-  // 每次都要对 677 个条目做「读 46 字节头 + 读文件名 + 读 extra」的异步 File 读取，
-  // 真机上是几千次小块读取（实测桌面端一遍约 0.4 s，手机上更贵）。
-  // 用 WeakMap 按 File 缓存目录解析结果，三处共用一次。
-  // File 是不可变 Blob，按对象缓存不会读到过期内容；WeakMap 条目随 File 一起回收。
-  insertOnce(
-    'src/services/chat/history/zipReader.ts',
-    'mobile-shell: cached zip directory',
-    'const readDirectory = async (file: File): Promise<{ entries: Entry[]; offset: number }> => {',
-    `// mobile-shell: cached zip directory —— 一次导入里 checkArchiveFormat / countZipEntries /
-// readArchive 会各解析一遍中央目录；缓存后只解析一次（目录本身很小，677 条目）。
-const directoryCache = new WeakMap<File, Promise<{ entries: Entry[]; offset: number }>>()
-const readDirectoryCached = (file: File): Promise<{ entries: Entry[]; offset: number }> => {
-  let pending = directoryCache.get(file)
-  if (!pending) {
-    pending = readDirectory(file)
-    directoryCache.set(file, pending)
-    void pending.catch(() => {
-      directoryCache.delete(file)
-    })
-  }
-  return pending
-}
-
-`,
-    'before'
-  )
-
-  replaceOnce(
-    'src/services/chat/history/zipReader.ts',
-    'mobile-shell: cached directory in count',
-    `export const countZipEntries = async (file: File): Promise<number> => {
-  const directory = await readDirectory(file)`,
-    `export const countZipEntries = async (file: File): Promise<number> => {
-  // mobile-shell: cached directory in count —— 与 checkArchiveFormat / readArchive 共用目录解析结果
-  const directory = await readDirectoryCached(file)`
-  )
-
-  replaceOnce(
-    'src/services/chat/history/zipReader.ts',
-    'mobile-shell: cached directory in readArchive',
-    `export async function* readArchive(file: File): AsyncGenerator<ArchiveEntry> {
-  const directory = await readDirectory(file)`,
-    `export async function* readArchive(file: File): AsyncGenerator<ArchiveEntry> {
-  // mobile-shell: cached directory in readArchive —— 与 checkArchiveFormat / countZipEntries 共用
-  const directory = await readDirectoryCached(file)`
-  )
+  // ── 补丁 19：归档读取改为整文件 fork（见 web-patches/mobile/overrides/history/zipReader.ts）──
+  // 【为什么从「小补丁」升级成 fork】真机导入慢的大头之一是「2000+ 次小块异步读中央目录 +
+  // 每条目 2~3 次读本地头」。改成一次读整份中央目录、每条目一次读本地头后，补丁形态
+  // 已经覆盖不了变化范围；fork 由 web-patches/mobile/manifests/history.json 记录上游
+  // 基线 sha256，上游一动就报错，不会被静默覆盖。原来的 cached 目录 / countZipEntries
+  // 逻辑都已并进 fork，这里不再重复打补丁。
 
   // ── 补丁 20：移动端官方 App 风格文案 ─────────────────────────────────────
   // 这次移动端改版按官方 Android App 的截图重做（见 docs/mobile-ui-spec.md），
@@ -956,6 +979,10 @@ const readDirectoryCached = (file: File): Promise<{ entries: Entry[]; offset: nu
   balanceFetchFailed: '获取失败',
   balanceInsufficient: '余额不足',
   historyExportSaved: '已保存到 {path}',
+  historyImportMergeDescription:
+    '导入的对话会与手机现有对话合并：同一条对话保留较新的版本，本机已有的对话不会被删除。',
+  historyImportBackupLabel: '导入前自动备份本机数据（推荐）',
+  historyImportBackupHint: '备份保存到 Documents/DeepChat；数据未变化时自动跳过。',
   // ── mobile-ui: mobile strings end ──
 `
 
@@ -990,6 +1017,10 @@ const readDirectoryCached = (file: File): Promise<{ entries: Entry[]; offset: nu
   balanceFetchFailed: 'Failed to load',
   balanceInsufficient: 'Insufficient balance',
   historyExportSaved: 'Saved to {path}',
+  historyImportMergeDescription:
+    'Imported chats are merged with the chats on this phone. For the same chat the newer version wins; existing chats are never deleted.',
+  historyImportBackupLabel: 'Back up local data before importing (recommended)',
+  historyImportBackupHint: 'Saved to Documents/DeepChat; skipped automatically when nothing changed.',
   // ── mobile-ui: mobile strings end ──
 `
 
@@ -1069,6 +1100,56 @@ import { exportHistoryToDevice } from '../../shell/export-bridge.js'`
       link.download = name
       link.click()
       setTimeout(() => URL.revokeObjectURL(url), 10_000)`
+  )
+
+  // ── 补丁 23：导入 = 合并，确认弹窗按手机语义显示并提供备份开关 ──────────────
+  // 上游这套文案是给「覆盖导入」写的（桌面端语义正确）；手机端实际是合并。
+  // 因此只在原生壳里替换成合并说明，并给一个「导入前自动备份」复选框
+  // （默认开，选择记在 localStorage；导入桥读同一个键）。
+  replaceOnce(
+    'src/components/settings/SettingsDialog.tsx',
+    'mobile-shell: import backup pref',
+    "import { exportHistoryToDevice } from '../../shell/export-bridge.js'",
+    `import { exportHistoryToDevice } from '../../shell/export-bridge.js'
+// mobile-shell: import backup pref —— 导入前自动备份开关（默认开，键与导入桥一致）
+import { isAutoBackupEnabled, setAutoBackupEnabled } from '../../shell/import-bridge.js'`
+  )
+
+  replaceOnce(
+    'src/components/settings/SettingsDialog.tsx',
+    'mobile-shell: import confirm body',
+    `      <div className={styles.importConfirmText}>{t('historyImportConfirmDescription')}</div>`,
+    `      {/* mobile-shell: import confirm body —— 手机端是合并语义，不能照抄「覆盖」说明 */}
+      <div className={styles.importConfirmText}>
+        {isNativeShell() ? t('historyImportMergeDescription') : t('historyImportConfirmDescription')}
+      </div>
+      {isNativeShell() ? (
+        <label
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            marginTop: '12px',
+            fontSize: '13px',
+            cursor: 'pointer',
+          }}
+        >
+          <input
+            type="checkbox"
+            defaultChecked={isAutoBackupEnabled()}
+            onChange={(event) => setAutoBackupEnabled(event.currentTarget.checked)}
+          />
+          <span>{t('historyImportBackupLabel')}</span>
+        </label>
+      ) : null}`
+  )
+
+  replaceOnce(
+    'src/components/settings/SettingsDialog.tsx',
+    'mobile-shell: import cell description',
+    `      description={t('historyImportDescription')}`,
+    `      /* mobile-shell: import cell description —— 原生壳是合并，桌面端仍是覆盖 */
+      description={isNativeShell() ? t('historyImportMergeDescription') : t('historyImportDescription')}`
   )
 }
 

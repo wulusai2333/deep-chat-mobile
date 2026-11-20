@@ -11,10 +11,12 @@ import * as db from '../web/src/services/chat/db.js'
 import { exportHistorySnapshot, importHistory } from '../web/src/services/chat/backup.js'
 import { replaceHistory, useChatStore } from '../web/src/services/chat/store.js'
 import { writeArchive } from '../web/src/services/chat/history/zipWriter.js'
+import { checkArchiveFormat } from '../web/src/services/chat/history/importArchive.js'
 // 必须从 web/src/shell/ 引入，而不是 web-patches/：
 // 注入后的文件在那里，导入路径（../services/...）才成立。
 // 这样测的就是**实际进 APK 的那份代码**，而不是一份结构不同的副本。
 import { consumePendingFile, installImportBridge, mergeImport } from '../web/src/shell/import-bridge.js'
+import { NATIVE_CHUNK_BYTES } from '../web/src/shell/native-backup.js'
 import type { Session } from '../web/src/services/chat/types.js'
 
 const log = (message) => console.log(`[test] ${message}`)
@@ -156,6 +158,11 @@ const run = async () => {
   // ══ 场景 2：同一个 ZIP 再导一次（幂等）══
   const r2 = await mergeImport(zipA)
   check(r2.added === 0 && r2.updated === 0 && r2.skipped === 2, '场景2 重复导入全部跳过', r2)
+  check(
+    r2.parsed === 0 && r2.skippedFast === 2,
+    '场景2 账本命中后不再解压/解析（快速跳过）',
+    { parsed: r2.parsed, skippedFast: r2.skippedFast }
+  )
   summaries = await db.loadSessionSummaries()
   check(summaries.length === 2, '场景2 会话数不变', summaries.length)
 
@@ -489,9 +496,9 @@ const run = async () => {
     { chunks: stub.backup.chunks, bytes: stub.backup.bytes }
   )
   check(
-    stub.backup.chunks === Math.ceil(stub.backup.bytes / (256 * 1024)),
-    '场景11 分块大小不超过 256 KB（桥负载上限）',
-    { chunks: stub.backup.chunks, bytes: stub.backup.bytes }
+    stub.backup.chunks === Math.ceil(stub.backup.bytes / NATIVE_CHUNK_BYTES),
+    '场景11 分块大小不超过桥负载上限（1 MB）',
+    { chunks: stub.backup.chunks, bytes: stub.backup.bytes, chunk: NATIVE_CHUNK_BYTES }
   )
   delete (globalThis as any).Capacitor
 
@@ -500,15 +507,16 @@ const run = async () => {
   // 【为什么必须有】前面所有场景拿到的都是已经拼好的 File。真机上 File 是
   // 「原生逐块 base64 → JS 拼 Blob」出来的：这条路径不测，等于没测用户真正的入口。
   // 这里用内存里的 ZIP 做原生桩，走真实的 consumePendingFile()。
+  const chunkBody = 1600 * 1024
   const chunkZip = await makeArchive([
     sessionFile({
       id: 'sess-chunked',
       title: '分块读取会话',
       updatedAt: T4,
       messages: [
-        // 300 KB 正文：STORE（不压缩）ZIP 因此超过 256 KB，会分成多块读，
+        // 1.6 MB 正文：STORE（不压缩）ZIP 超过 1 MB 分块上限，会分成多块读，
         // 才能真正验证「逐块拼 Blob」而不是碰巧一块读完。
-        msg(1, null, 'USER', 'a'.repeat(300 * 1024), T4),
+        msg(1, null, 'USER', 'a'.repeat(chunkBody), T4),
       ],
     }),
   ])
@@ -529,8 +537,7 @@ const run = async () => {
   // 多块拼接后必须仍然是完整可解析的 ZIP，内容一字不差
   const chunkedSession = await db.loadSession('sess-chunked')
   check(
-    chunkedSession !== undefined &&
-      chunkedSession.messages[0]?.content.length === 300 * 1024,
+    chunkedSession !== undefined && chunkedSession.messages[0]?.content.length === chunkBody,
     '场景12 分块读进来的归档完整导入（正文长度一致）',
     chunkedSession?.messages[0]?.content.length
   )
@@ -627,6 +634,128 @@ const run = async () => {
     { beforeAbort, afterAbort }
   )
   delete (globalThis as any).Capacitor
+
+  // ══ 场景 15：目录只解析一遍；一次导入的 File.slice 次数与条目数同阶 ══
+  //
+  // 0.2.4 每个条目要 3~4 次小块读（中央目录按条目读、本地头分开读），677 条目就是
+  // 2000+ 次异步读，真机上光「校验」就要等很久。现在目录一次读完、每条目头一次读完。
+  const manySessions = Array.from({ length: 60 }, (_, index) =>
+    sessionFile({
+      id: `sess-many-${index}`,
+      title: `批量 ${index}`,
+      updatedAt: T3,
+      messages: [msg(1, null, 'USER', `第 ${index} 条`, T3)],
+    })
+  )
+  const manyZip = await makeArchive(manySessions)
+  let directorySlices = 0
+  const manySlice = manyZip.slice.bind(manyZip)
+  ;(manyZip as unknown as { slice: typeof manyZip.slice }).slice = (start, end) => {
+    directorySlices += 1
+    return manySlice(start, end)
+  }
+  directorySlices = 0
+  await checkArchiveFormat(manyZip)
+  check(
+    directorySlices <= 10,
+    '场景15 校验只读一遍目录（61 条目也不逐条读 3 次）',
+    { directorySlices, entries: manySessions.length + 1 }
+  )
+
+  const sliceZip = await makeArchive([
+    sessionFile({
+      id: 'sess-slice-1',
+      title: '切片计数 1',
+      updatedAt: T3,
+      messages: [msg(1, null, 'USER', '一', T3)],
+    }),
+    sessionFile({
+      id: 'sess-slice-2',
+      title: '切片计数 2',
+      updatedAt: T3,
+      messages: [msg(1, null, 'USER', '二', T3)],
+    }),
+    sessionFile({
+      id: 'sess-slice-3',
+      title: '切片计数 3',
+      updatedAt: T3,
+      messages: [msg(1, null, 'USER', '三', T3)],
+    }),
+  ])
+  let sliceCount = 0
+  const originalSlice = sliceZip.slice.bind(sliceZip)
+  ;(sliceZip as unknown as { slice: typeof sliceZip.slice }).slice = (start, end) => {
+    sliceCount += 1
+    return originalSlice(start, end)
+  }
+  sliceCount = 0
+  const r15 = await mergeImport(sliceZip)
+  check(r15.added === 3, '场景15 计数 File 的归档仍能完整导入', r15.added)
+  check(
+    sliceCount <= 30,
+    '场景15 一次导入的 File.slice 次数与条目数同阶（不再逐条解析多遍）',
+    { sliceCount, entries: 5 }
+  )
+
+  // ══ 场景 16：账本 v2 键格式；旧版文本指纹键被淘汰 ══
+  localStorage.setItem(
+    'deep-chat:import-ledger',
+    JSON.stringify({ 'legacy|text|fingerprint': true, 'legacy-key': true })
+  )
+  const ledgerZip = await makeArchive([
+    sessionFile({
+      id: 'sess-ledger-v2',
+      title: '账本 v2',
+      updatedAt: T3,
+      messages: [msg(1, null, 'USER', '账本', T3)],
+    }),
+  ])
+  const r16 = await mergeImport(ledgerZip)
+  check(r16.added === 1, '场景16 旧版账本不影响新导入', r16.added)
+  const rawLedger = JSON.parse(localStorage.getItem('deep-chat:import-ledger') ?? '{}')
+  const ledgerKeys = Object.keys(rawLedger)
+  check(
+    ledgerKeys.length === 1 && /^sess-ledger-v2\|\d+\|\d+$/.test(ledgerKeys[0] ?? ''),
+    '场景16 账本只保留 v2 键（id|CRC|大小），旧键被淘汰',
+    ledgerKeys
+  )
+
+  // ══ 场景 17：增量提交只写导入数据，不清空本机 ══
+  const beforeIncremental = await db.loadSessionSummaries()
+  await replaceHistory(async () => {
+    await db.putStagingSessions([fakeSession('sess-incremental', [])] as unknown as Session[])
+  }, db.commitMergeStaging)
+  const afterIncremental = await db.loadSessionSummaries()
+  check(
+    afterIncremental.length === beforeIncremental.length + 1 &&
+      afterIncremental.some((summary) => summary.id === 'sess-incremental') &&
+      beforeIncremental.every((summary) =>
+        afterIncremental.some((next) => next.id === summary.id)
+      ),
+    '场景17 增量提交保留全部本机会话并加入新会话',
+    { before: beforeIncremental.length, after: afterIncremental.length }
+  )
+
+  // ══ 场景 18：写暂存失败 → 整体回滚，正式数据不变 ══
+  const beforeRollback = (await db.loadSessionSummaries()).length
+  let rollbackThrew = false
+  try {
+    await replaceHistory(async () => {
+      await db.putStagingSessions([fakeSession('sess-rollback', [])] as unknown as Session[])
+      // 缺 id 的记录会让 put 直接抛 DataError，模拟提交阶段失败
+      await db.putStagingSessions([{ messages: [] } as unknown as Session])
+    }, db.commitMergeStaging)
+  } catch {
+    rollbackThrew = true
+  }
+  const afterRollback = await db.loadSessionSummaries()
+  check(rollbackThrew, '场景18 暂存写失败会抛错（不静默吞掉）')
+  check(
+    afterRollback.length === beforeRollback &&
+      !afterRollback.some((summary) => summary.id === 'sess-rollback'),
+    '场景18 失败后正式数据不变（原子性）',
+    { beforeRollback, after: afterRollback.length }
+  )
 
   // ══ 汇总 ══
   const failed = results.filter((r) => !r.ok)
