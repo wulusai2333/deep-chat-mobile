@@ -36,7 +36,7 @@ const config: CapacitorConfig = {
     minWebViewVersion: 105,
   },
   // 原生壳标识，前端用 navigator.userAgent 判断是否跑在 APK 里
-  appendUserAgent: 'DeepChatMobile/0.2.7',
+  appendUserAgent: 'DeepChatMobile/0.2.8',
   // 键盘行为交给 WebView 自身 + useMobileViewport（上游已处理 visualViewport）
   ios: {
     contentInset: 'never',

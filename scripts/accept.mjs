@@ -104,6 +104,16 @@ const makeBridge = ({ apiKey }) => `
       if (plugin === 'DeepChatFiles' && method === 'abortBackup') {
         return Promise.resolve({ aborted: true })
       }
+      // 价目文档抓取（CapacitorHttp.request）：验收不需要真联网。
+      // 返回夹具文本并计数 —— 「每天最多抓一次」的缓存行为靠这个计数断言；
+      // __PRICING_MODE__ = 'fail' 时模拟断网，验证回退到内置价表。
+      if (plugin === 'CapacitorHttp' && method === 'request') {
+        window.__PRICING_CALLS__ = (window.__PRICING_CALLS__ || 0) + 1
+        if (window.__PRICING_MODE__ === 'fail') {
+          return Promise.reject(new Error('net::ERR_NAME_NOT_RESOLVED'))
+        }
+        return Promise.resolve({ status: 200, data: window.__PRICING_MD__ || '', headers: {} })
+      }
       return Promise.reject(new Error('unstubbed native call: ' + plugin + '.' + method))
     },
   }
@@ -1107,6 +1117,323 @@ const main = async () => {
       idle: idleState,
     }
   )
+
+  // ══ 场景 H：本轮消耗面板（峰谷计价 + 每日抓价）══
+  // 官方 App 在最后一条回答下方有个数据库图标，点开显示本轮三类 token 与金额。
+  // 这里验「入口在、点得开、数字对得上、价目每天只抓一次」；像素细节留给 ui:preview 人工对比。
+  // 造数据仍走 IndexedDB（同场景 G），不模拟流式接口：
+  //   1. 塞一条带 usage 的会话，usage 取官方截图那组数字（命中 1024 / 未命中 3568 / 输出 508）；
+  //   2. createdAt 固定在 2026-11-27T12:00:00Z（北京周五 20:00 = 空闲时段），
+  //      金额可精确对账：0.00002048 + 0.003568 + 0.002032 = 0.00562048；
+  //   3. 抓价走 makeBridge 的 CapacitorHttp 桩，返回真实价目页片段并计数。
+  info('H. 本轮消耗面板')
+
+  const PRICING_MD = `# 模型 & 价格
+
+## 模型细节
+
+| 模型 | 模型 | 模型 | deepseek-flash(1) | deepseek-v4-pro |
+| --- | --- | --- | --- | --- |
+| 模型版本 | 模型版本 | 模型版本 | DeepSeek-V4.1-Flash-1017 | DeepSeek-V4-Pro-0813 |
+| 上下文长度 | 上下文长度 | 上下文长度 | 1M | 1M |
+| 价格(2) | 百万tokens输入 / （缓存命中） | 空闲时段 | 0.02元 | 0.15元 |
+| 价格(2) | 百万tokens输入 / （缓存命中） | 高峰时段 | 0.04元 | 0.30元 |
+| 价格(2) | 百万tokens输入 / （缓存未命中） | 空闲时段 | 1元 | 4.5元 |
+| 价格(2) | 百万tokens输入 / （缓存未命中） | 高峰时段 | 2元 | 9.0元 |
+| 价格(2) | 百万tokens输出 | 空闲时段 | 4元 | 13.5元 |
+| 价格(2) | 百万tokens输出 | 高峰时段 | 8元 | 27.0元 |
+
+(2) 空闲时段价格为高峰时段价格的一半。北京时间周一至周五（不含中国法定节假日）9:00 - 12:00、14:00 - 18:00 为高峰时段。
+
+***
+
+## 扣费规则
+
+模型调用费用 = token 消耗量 × 模型单价。
+`
+
+  /** 带 usage 的会话：时间固定在北京周五 20:00（谷时），金额可手算对账 */
+  const COST_SEED = `
+  (async () => {
+    const at = Date.parse('2026-11-27T12:00:00Z')
+    const session = {
+      id: 'accept-cost-session',
+      title: '消耗验收',
+      createdAt: at - 60000,
+      updatedAt: at,
+      messages: [
+        { id: 'accept-cost-question', role: 'user', content: '你好', files: [], createdAt: at - 60000 },
+        {
+          id: 'accept-cost-reply',
+          role: 'assistant',
+          createdAt: at,
+          model: 'deepseek-flash',
+          thinking: false,
+          search: false,
+          prefix: true,
+          status: 'done',
+          blocks: [{ type: 'text', text: '这是一条用于验收消耗面板的回答。' }],
+          usage: {
+            input_tokens: 3568,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 1024,
+            output_tokens: 508,
+          },
+        },
+      ],
+    }
+    const summary = {
+      id: session.id,
+      title: session.title,
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt,
+      fileIds: [],
+    }
+    const db = await new Promise((resolve, reject) => {
+      const request = indexedDB.open('chat-demo', 11)
+      request.onupgradeneeded = () => {
+        const database = request.result
+        for (const name of ['sessions', 'files', 'sessionsStaging', 'filesStaging']) {
+          if (!database.objectStoreNames.contains(name)) {
+            database.createObjectStore(name, { keyPath: 'id' })
+          }
+        }
+        const summaries = database.objectStoreNames.contains('sessionSummaries')
+          ? request.transaction.objectStore('sessionSummaries')
+          : database.createObjectStore('sessionSummaries', { keyPath: 'id' })
+        if (!summaries.indexNames.contains('fileIds')) {
+          summaries.createIndex('fileIds', 'fileIds', { multiEntry: true })
+        }
+      }
+      request.onsuccess = () => resolve(request.result)
+      request.onerror = () => reject(request.error)
+    })
+    await new Promise((resolve, reject) => {
+      const transaction = db.transaction(['sessions', 'sessionSummaries'], 'readwrite')
+      transaction.objectStore('sessions').put(session)
+      transaction.objectStore('sessionSummaries').put(summary)
+      transaction.oncomplete = resolve
+      transaction.onerror = () => reject(transaction.error)
+      transaction.onabort = () => reject(transaction.error)
+    })
+    db.close()
+    return true
+  })().catch((error) => {
+    window.__COST_SEED_ERROR__ = String((error && error.message) || error)
+    return false
+  })
+  `
+
+  const COST_PROBE = `(() => ({
+    rootChildren: (() => {
+      const root = document.getElementById('root')
+      return root ? root.children.length : -1
+    })(),
+    errors: window.__PAGE_ERRORS__ || [],
+    probe: window.__COST_PROBE__ || {},
+  }))()`
+
+  const cost = await scenario({
+    label: 'mobile-cost',
+    scripts: [
+      ERROR_TRAP,
+      makeBridge({ apiKey: 'sk-test-0123456789abcdef0123456789abcdef' }),
+      `window.__PRICING_MD__ = ${JSON.stringify(PRICING_MD)}`,
+      `window.localStorage.clear()`,
+    ],
+    before: async (browser) => {
+      await browser.setViewport({ width: 393, height: 852, scale: 2, mobile: true })
+      await browser.evaluate(`new Promise((resolve) => setTimeout(resolve, 700))`)
+
+      const seeded = await browser.evaluate(COST_SEED)
+      await reloadPage(browser)
+      const rowReady = await browser
+        .waitFor(
+          `[...document.querySelectorAll('[role="button"]')].some((node) => (node.textContent || '').trim() === '消耗验收')`,
+          { timeoutMs: 5000, label: '抽屉里有消耗验收会话' }
+        )
+        .then(() => true)
+        .catch(() => false)
+
+      const opened = await browser.evaluate(`(async () => {
+        const tap = (label) => {
+          const node = [...document.querySelectorAll('button, [role="button"]')].find(
+            (item) => item.getAttribute('aria-label') === label
+          )
+          if (node) node.click()
+          return Boolean(node)
+        }
+        tap('打开边栏')
+        await new Promise((resolve) => setTimeout(resolve, 700))
+        const row = [...document.querySelectorAll('[role="button"]')].find(
+          (node) => (node.textContent || '').trim() === '消耗验收'
+        )
+        if (row) row.click()
+        return Boolean(row)
+      })()`)
+      const entryReady = await browser
+        .waitFor(
+          `[...document.querySelectorAll('button')].some((node) => node.getAttribute('aria-label') === '查看本轮消耗')`,
+          { timeoutMs: 5000, label: '最后一条回答下方有消耗入口' }
+        )
+        .then(() => true)
+        .catch(() => false)
+
+      const roundTrip = await browser.evaluate(`(async () => {
+        const entry = () => [...document.querySelectorAll('button')].find(
+          (node) => node.getAttribute('aria-label') === '查看本轮消耗'
+        )
+        const node = entry()
+        if (!node) return { clicked: false }
+
+        node.click()
+        await new Promise((resolve) => setTimeout(resolve, 500))
+        const openedText = document.body.innerText || ''
+        const callsAfterOpen = window.__PRICING_CALLS__ || 0
+        const fetchedAt = (() => {
+          try {
+            const raw = window.localStorage.getItem('deep-chat:cost:pricing:v1')
+            const table = raw ? JSON.parse(raw) : null
+            return table ? { source: table.source, models: Object.keys(table.models || {}).length } : null
+          } catch (error) {
+            return { error: String((error && error.message) || error) }
+          }
+        })()
+
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+        await new Promise((resolve) => setTimeout(resolve, 400))
+        const closedText = document.body.innerText || ''
+
+        // 关掉再打开：24h 内不应再发一次抓价请求
+        entry().click()
+        await new Promise((resolve) => setTimeout(resolve, 400))
+        const callsAfterReopen = window.__PRICING_CALLS__ || 0
+        return {
+          clicked: true,
+          openedText,
+          closedText,
+          callsAfterOpen,
+          callsAfterReopen,
+          fetchedAt,
+        }
+      })()`)
+
+      await browser.evaluate(
+        `window.__COST_PROBE__ = ${JSON.stringify({
+          seeded: seeded === true,
+          rowReady,
+          opened,
+          entryReady,
+          roundTrip,
+        })}`
+      )
+    },
+    probe: COST_PROBE,
+  })
+  const costProbe = cost.probe || {}
+  const roundTrip = costProbe.roundTrip || {}
+  const openedText = String(roundTrip.openedText || '')
+  const closedText = String(roundTrip.closedText || '')
+  check(cost.rootChildren > 0, 'H1 消耗场景渲染出内容（非白屏）')
+  check(cost.errors.length === 0, 'H2 无未捕获异常', cost.errors)
+  check(
+    costProbe.seeded === true && costProbe.rowReady === true && costProbe.opened === true,
+    'H3 种子会话写入并能从抽屉打开',
+    { seeded: costProbe.seeded, rowReady: costProbe.rowReady, opened: costProbe.opened }
+  )
+  check(costProbe.entryReady === true && roundTrip.clicked === true, 'H4 最后一条回答下方出现消耗入口，可点击')
+  check(
+    openedText.includes('本轮消耗额度') && openedText.includes('0.00562048'),
+    'H5 面板显示本轮合计 0.00562048 元',
+    openedText.slice(0, 120)
+  )
+  check(
+    openedText.includes('1,024') &&
+      openedText.includes('3,568') &&
+      openedText.includes('508') &&
+      openedText.includes('0.00002048') &&
+      openedText.includes('0.003568') &&
+      openedText.includes('0.002032'),
+    'H6 三条 token 用量与金额与官方截图一致'
+  )
+  check(openedText.includes('空闲时段'), 'H7 谷时按「空闲时段」价格估算')
+  check(/上下文已占用\s*0%/.test(openedText), 'H8 上下文占用 0%（4592 / 1M 取整）')
+  check(
+    roundTrip.callsAfterOpen === 1 && roundTrip.callsAfterReopen === 1,
+    'H9 价目每天只抓一次（重开面板不再请求）',
+    { open: roundTrip.callsAfterOpen, reopen: roundTrip.callsAfterReopen }
+  )
+  check(
+    roundTrip.fetchedAt && roundTrip.fetchedAt.source === 'official' && roundTrip.fetchedAt.models >= 2,
+    'H10 抓到的官方价目已落盘（source=official，两个模型）',
+    roundTrip.fetchedAt
+  )
+  check(!closedText.includes('本轮消耗额度'), 'H11 Esc 能关闭面板')
+
+  // ── H2：抓价失败路径 ────────────────────────────────────────────────
+  // 断网 / 页面改版时，面板必须仍能用内置价表算出金额；更重要的是**不能把失败结果
+  // 写进缓存**（否则下次启动会读到一张空表，金额全变 0 而没人发现）。
+  const costFail = await scenario({
+    label: 'mobile-cost-fail',
+    scripts: [
+      ERROR_TRAP,
+      makeBridge({ apiKey: 'sk-test-0123456789abcdef0123456789abcdef' }),
+      `window.__PRICING_MODE__ = 'fail'`,
+      `window.localStorage.clear()`,
+    ],
+    before: async (browser) => {
+      await browser.setViewport({ width: 393, height: 852, scale: 2, mobile: true })
+      await browser.evaluate(`new Promise((resolve) => setTimeout(resolve, 700))`)
+      await browser.evaluate(COST_SEED)
+      await reloadPage(browser)
+      await browser
+        .waitFor(
+          `[...document.querySelectorAll('[role="button"]')].some((node) => (node.textContent || '').trim() === '消耗验收')`,
+          { timeoutMs: 5000, label: '抓价失败场景：抽屉里有种子会话' }
+        )
+        .catch(() => {})
+      const probe = await browser.evaluate(`(async () => {
+        const tap = (label) => {
+          const node = [...document.querySelectorAll('button, [role="button"]')].find(
+            (item) => item.getAttribute('aria-label') === label
+          )
+          if (node) node.click()
+          return Boolean(node)
+        }
+        tap('打开边栏')
+        await new Promise((resolve) => setTimeout(resolve, 700))
+        const row = [...document.querySelectorAll('[role="button"]')].find(
+          (node) => (node.textContent || '').trim() === '消耗验收'
+        )
+        if (row) row.click()
+        await new Promise((resolve) => setTimeout(resolve, 600))
+        const entry = [...document.querySelectorAll('button')].find(
+          (node) => node.getAttribute('aria-label') === '查看本轮消耗'
+        )
+        if (!entry) return { entry: false }
+        entry.click()
+        await new Promise((resolve) => setTimeout(resolve, 600))
+        return {
+          entry: true,
+          text: document.body.innerText || '',
+          calls: window.__PRICING_CALLS__ || 0,
+          cached: window.localStorage.getItem('deep-chat:cost:pricing:v1'),
+        }
+      })()`)
+      await browser.evaluate(`window.__COST_PROBE__ = ${JSON.stringify({ probe })}`)
+    },
+    probe: COST_PROBE,
+  })
+  const failProbe = (costFail.probe || {}).probe || {}
+  const failText = String(failProbe.text || '')
+  check(costFail.rootChildren > 0 && costFail.errors.length === 0, 'H12 抓价失败场景正常渲染且无异常', costFail.errors)
+  check(
+    failProbe.entry === true && failText.includes('0.00562048'),
+    'H13 断网时面板仍按内置价表显示金额',
+    failText.slice(0, 100)
+  )
+  check(failProbe.calls === 1, 'H14 只尝试抓价一次（不重试轰炸官方页）', failProbe.calls)
+  check(failProbe.cached === null, 'H15 抓价失败不写缓存（避免下次读到坏表）', failProbe.cached)
 
   // ══ 汇总 ══
   step('结果')

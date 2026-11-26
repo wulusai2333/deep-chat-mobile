@@ -242,6 +242,25 @@ i18n 文案、`main.tsx` 引入 mobile.css 这类小改动，继续用 prepare-w
 - 附件面板 / 语音模式切换：高度或透明度 180–220ms，别闪
 - 按钮按压：`transform: scale(0.96)` 或底色变化
 
+### 2.9 本轮消耗面板（`web-patches/mobile/cost/`）
+
+入口是最后一条回答动作栏**最左侧**的数据库图标（40–44px 触控区，图标 16–18px，
+`currentColor`，颜色 `--m-text-*` 的次要色），点开从底部弹出面板：
+
+- 遮罩 `rgba(0,0,0,.4)`；面板 220ms 滑入，圆角 `20px 20px 0 0`，`max-height: 85vh`，
+  底部 `padding-bottom: max(16px, env(safe-area-inset-bottom))`；三路关闭：Esc、点遮罩、下滑 > 80px。
+- 头行（单行，393px 与 360px 都不换行）：数据库图标 + `t('costTurnTitle')`（17px/600）
+  + 合计（28px/600，`font-variant-numeric: tabular-nums`，`元` 16px，与数字 baseline 对齐）。
+- 模型名不再做徽标，跟副标题同一行：`t('costPeakHint' | 'costOffPeakHint') · <模型名>`。
+- 卡片：浅灰底（暗色 `rgba(255,255,255,.06)`）、圆角 12px，三组「输入·缓存命中 /
+  输入·缓存未命中 / 输出」，每组三行：`单价 x 元 / 百万 tokens`、`用量 N tokens`（千分位）、
+  `金额 x 元`；组间 1px 分隔线。
+- 页脚：`t('costContextUsed')`（12px 居中）；下一行小字
+  `本次会话累计 ¥x · 价格更新于 YYYY-MM-DD`，点击触发一次强制刷新（300ms 节流）。
+- 数字一律用 `pricing.ts` 的 `formatMoney` / `formatTokens` / `formatPrice`，
+  **不要**在组件里 `toFixed`；金额最多 8 位小数、裁尾零。
+- 计费口径（峰谷判定、三桶归并、上下文占比）全在 `pricing.ts`，组件只做展示。
+
 ---
 
 ## 3. i18n 键（Lead 已加到 zh.ts / en.ts）
@@ -279,6 +298,23 @@ i18n 文案、`main.tsx` 引入 mobile.css 这类小改动，继续用 prepare-w
 | `balanceNetworkError` | 网络异常 | Network error |
 | `balanceFetchFailed` | 获取失败 | Failed to load |
 | `balanceInsufficient` | 余额不足 | Insufficient balance |
+| `costTurnTitle` | 本轮消耗额度 | This turn's cost |
+| `costPeakHint` | 按「高峰时段」价格估算 | Estimated at peak-hour rates |
+| `costOffPeakHint` | 按「空闲时段」价格估算 | Estimated at off-peak rates |
+| `costInputCacheHit` | 输入·缓存命中 | Input · cache hit |
+| `costInputCacheMiss` | 输入·缓存未命中 | Input · cache miss |
+| `costOutput` | 输出 | Output |
+| `costUnitPrice` | 单价 | Unit price |
+| `costUsageTokens` | 用量 | Tokens |
+| `costAmount` | 金额 | Amount |
+| `costPerMillion` | 元 / 百万 tokens | CNY / 1M tokens |
+| `costContextUsed` | 截止到本轮，上下文已占用 {percent}% | Context used so far: {percent}% |
+| `costSessionTotal` | 本次会话累计 | Session total |
+| `costPriceUpdatedAt` | 价格更新于 {date} | Prices updated {date} |
+| `costOpen` | 查看本轮消耗 | View this turn's cost |
+
+> `costInputCacheHit` / `costInputCacheMiss` 用 `·` 分隔主标签与灰小字第二行；
+> 面板按分隔符拆两行排版，新增同类键请保持这个约定。
 
 已有键直接用：`thinkingSwitch`、`search`、`send`、`chatInputStopButtonTooltip`、`voiceInput`、
 `close`、`more`、`newChat`、`expandSiderbarButton`、`ttsPlay`、`ttsStop`、`settings`、
@@ -327,8 +363,10 @@ node scripts/ui-preview.mjs
    - 会话页：顶栏标题 + 同样的输入框
 2. 桌面端（1280px 宽）截图与改版前一致（ui-preview 里 `desktop-welcome.png` 对比）。
 3. 功能可用：发送、停止、上传、拍照/相册/文件、按住说话转写、朗读、抽屉搜索、新建/切换/重命名/删除会话。
-4. `pnpm verify`、`pnpm accept`、`pnpm test:import` 全绿（Lead 会同步更新验收项）。
+4. `pnpm verify`、`pnpm accept`、`pnpm test:import`、`pnpm test:cost` 全绿（Lead 会同步更新验收项）。
 5. 深浅色都正常。
+6. 消耗面板：最后一条回答下方有数据库图标，点开金额与官方截图逐分一致
+   （`0.00562048 元` 那组夹具由 `accept` 的 H 组守着），重开不重复抓价。
 
 
 ---
@@ -350,3 +388,11 @@ node scripts/ui-preview.mjs
 6. **账户行余额是本项目新增的实用信息**，官方 App 账户行只显示名称。数据来自官方
    `GET /user/balance`，打开抽屉自动查询、点击可刷新；余额不足 / Key 无效 / 网络异常
    都有独立文案，且余额只存在内存，不落盘、不进历史 ZIP。
+7. **消耗面板的「免费」徽标换成模型名**：官方 App 的会话不单独计费，所以标「免费」；
+   本壳走真实 API，每轮真扣费，标「免费」是错误信息。
+8. **面板多一行「本次会话累计」**：官方面板只有本轮。用户要看整个会话花掉多少，
+   所以在官方页脚下面加一行小字，上面三块的布局仍与官方一致。
+9. **峰谷节假日表是硬编码的**（`cost/pricing.ts` 的 `CN_HOLIDAYS`）：官方页面只写规则
+   不列日期，只能按国务院安排维护。2026 年整表已按国办发明电〔2025〕7 号列出，
+   2027 年公布后补；漏列一天会把谷价按峰价多算一倍（详见
+   [patches/cost-panel.md](../patches/cost-panel.md)）。

@@ -3,7 +3,7 @@
 这里是**给人看的文档**，不是构建输入。真正的补丁逻辑在 `scripts/prepare-web.mjs`：
 
 - **注入**：`web-patches/*.ts` → `web/src/shell/`，`web-patches/mobile/` → `web/src/mobile/`
-- **锚点补丁**：对上游文件做插入 / 精确替换，共 12 个上游文件、27 处；
+- **锚点补丁**：对上游文件做插入 / 精确替换，共 14 个上游文件、30 处；
   `scripts/verify.mjs` 的 D 组用 `mobile-shell:` / `mobile-ui:` 标记逐个守住，谁改回去自检立刻失败
 - **整文件 fork**：组件的整文件重写放 `web-patches/mobile/overrides/`，manifest 记录上游 `sha256`
   基线，上游一变就让 `prepare` 失败（详见 [`../docs/mobile-ui-spec.md`](../docs/mobile-ui-spec.md) §1）。
@@ -62,6 +62,13 @@
 | --- | --- | --- | --- | --- |
 | 23 | `src/components/settings/SettingsDialog.tsx` | `device export import` | [export.ts](export.ts) | 引入「是否原生壳」与「原生导出」两个入口 |
 | 24 | `src/components/settings/SettingsDialog.tsx` | `device export body` | [export.ts](export.ts) | WebView 没有 DownloadListener，`<a download>` 静默无效：改走分块原生写 Documents + 进度/结果浮层 |
+
+### 消耗面板（0.2.8 未发布）
+
+| # | 上游文件 | 标记 | 说明文件 | 一句话理由 |
+| --- | --- | --- | --- | --- |
+| 25 | `src/components/messages/AssistantMessage.tsx` | `turn cost entry import` | [cost-panel.md](cost-panel.md) | 引入移动端「本轮消耗额度」入口组件（桌面端返回 null） |
+| 26 | `src/components/messages/AssistantMessage.tsx` | `turn cost entry jsx` | [cost-panel.md](cost-panel.md) | 最后一条回答的动作栏最左侧插入数据库图标，点开是本轮 token 与金额 |
 
 > 该补丁新增三个壳层文件：`native-backup.ts`（分块保存，导入前备份也复用它）、
 > `export-bridge.ts`（导出编排与失败重试）、`export-ui.ts`（进度 / 成功路径 / 失败原因）。

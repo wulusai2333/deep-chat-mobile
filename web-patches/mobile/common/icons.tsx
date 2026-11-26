@@ -148,3 +148,19 @@ export const MIconEllipsis = ({ size = 20 }: IconProps) => (
   </svg>
 )
 
+/**
+ * 数据库（堆叠圆柱）：回答动作栏里的「本轮消耗额度」入口，面板标题左侧同款。
+ *
+ * 【为什么用 1.6 的线宽】入口按钮只有 16px，本套图标默认 2 是按 24px 显示定的；
+ * 缩到 16px 后 2 会显得糊成一团，官方截图里这个图标也明显比旁边的喇叭细，
+ * 所以单独取 1.6。圆柱用「顶部椭圆 + 两条侧壁弧」画，是为了在 16px 下仍能看出分层，
+ * 只画三条横线会变成「菜单」而不是「数据库」。
+ */
+export const MIconDatabase16 = ({ size = 16, strokeWidth = 1.6 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden {...stroke} strokeWidth={strokeWidth}>
+    <ellipse cx="12" cy="6" rx="7.4" ry="3.1" />
+    <path d="M4.6 6v6.2c0 1.7 3.3 3.1 7.4 3.1s7.4-1.4 7.4-3.1V6" />
+    <path d="M4.6 12.2v6.2c0 1.7 3.3 3.1 7.4 3.1s7.4-1.4 7.4-3.1v-6.2" />
+  </svg>
+)
+

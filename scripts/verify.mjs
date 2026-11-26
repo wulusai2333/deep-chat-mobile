@@ -457,6 +457,12 @@ const checkPatches = () => {
     'topbar/MobileTopBar.tsx',
     'drawer/MobileDrawer.tsx',
     'balance/useBalance.ts',
+    'cost/pricing.ts',
+    'cost/pricing-source.ts',
+    'cost/usePricing.ts',
+    'cost/TurnCostButton.tsx',
+    'cost/TurnCostSheet.tsx',
+    'cost/TurnCostSheet.module.css',
   ]
   if (existsSync(mobileDir)) {
     for (const file of mobileFiles) {
@@ -520,6 +526,7 @@ const checkPatches = () => {
     ['src/i18n/zh.ts', 'mobile-ui: mobile strings zh'],
     ['src/i18n/en.ts', 'mobile-ui: mobile strings en'],
     ['src/main.tsx', 'mobile-ui: mobile css'],
+    ['src/components/messages/AssistantMessage.tsx', 'mobile-ui: turn cost entry jsx'],
   ]
   for (const [file, marker] of markers) {
     const full = join(paths.web, file)

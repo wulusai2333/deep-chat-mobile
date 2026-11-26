@@ -983,6 +983,23 @@ export const exportHistory = (
     '导入的对话会与手机现有对话合并：同一条对话保留较新的版本，本机已有的对话不会被删除。',
   historyImportBackupLabel: '导入前自动备份本机数据（推荐）',
   historyImportBackupHint: '备份保存到 Documents/DeepChat；数据未变化时自动跳过。',
+  // ── 本轮消耗面板（回答动作栏的数据库图标）──
+  // costInputCacheHit / costInputCacheMiss 用「·」分隔主标签与灰小字说明：
+  // 面板里按第一个「·」拆成两行排版，对齐官方截图（输入 / 缓存命中）。
+  costTurnTitle: '本轮消耗额度',
+  costPeakHint: '按「高峰时段」价格估算',
+  costOffPeakHint: '按「空闲时段」价格估算',
+  costInputCacheHit: '输入·缓存命中',
+  costInputCacheMiss: '输入·缓存未命中',
+  costOutput: '输出',
+  costUnitPrice: '单价',
+  costUsageTokens: '用量',
+  costAmount: '金额',
+  costPerMillion: '元 / 百万 tokens',
+  costContextUsed: '截止到本轮，上下文已占用 {percent}%',
+  costSessionTotal: '本次会话累计',
+  costPriceUpdatedAt: '价格更新于 {date}',
+  costOpen: '查看本轮消耗',
   // ── mobile-ui: mobile strings end ──
 `
 
@@ -1021,6 +1038,23 @@ export const exportHistory = (
     'Imported chats are merged with the chats on this phone. For the same chat the newer version wins; existing chats are never deleted.',
   historyImportBackupLabel: 'Back up local data before importing (recommended)',
   historyImportBackupHint: 'Saved to Documents/DeepChat; skipped automatically when nothing changed.',
+  // ── this turn's cost panel —— 见 zh.ts 同名补丁
+  // costInputCacheHit / costInputCacheMiss 里的「·」是主标签与灰小字的分隔符。
+  // costTurnTitle / costOpen 用双引号：文案里带单引号，写进 en.ts 时不能再转义。
+  costTurnTitle: "This turn's cost",
+  costPeakHint: 'Estimated at peak-hour rates',
+  costOffPeakHint: 'Estimated at off-peak rates',
+  costInputCacheHit: 'Input · cache hit',
+  costInputCacheMiss: 'Input · cache miss',
+  costOutput: 'Output',
+  costUnitPrice: 'Unit price',
+  costUsageTokens: 'Tokens',
+  costAmount: 'Amount',
+  costPerMillion: 'CNY / 1M tokens',
+  costContextUsed: 'Context used so far: {percent}%',
+  costSessionTotal: 'Session total',
+  costPriceUpdatedAt: 'Prices updated {date}',
+  costOpen: "View this turn's cost",
   // ── mobile-ui: mobile strings end ──
 `
 
@@ -1150,6 +1184,35 @@ import { isAutoBackupEnabled, setAutoBackupEnabled } from '../../shell/import-br
     `      description={t('historyImportDescription')}`,
     `      /* mobile-shell: import cell description —— 原生壳是合并，桌面端仍是覆盖 */
       description={isNativeShell() ? t('historyImportMergeDescription') : t('historyImportDescription')}`
+  )
+
+  // ── 补丁 24：回答动作栏的「本轮消耗额度」入口（数据库图标 + 底部面板）───────
+  // 官方 App 在最后一条回答下方给出本轮 token 消耗与费用明细。实现全部在
+  // web-patches/mobile/cost/ 里，这里只做两处纯插入：import 与 JSX。
+  // 桌面端零变化由组件自身保证：非移动端 / 非最后一条 / 消息没有 usage / 算不出
+  // 价格时一律返回 null（见 TurnCostButton.tsx 顶部注释）。
+  //
+  // 【为什么两个 marker 都带后缀】insertOnce 用「文件里是否已含 marker」判断是否
+  // 已经打过补丁。若 import 用 'mobile-ui: turn cost entry'、JSX 用
+  // 'mobile-ui: turn cost entry jsx'，前者是后者的前缀 —— 先插 import 之后，
+  // JSX 那次会被误判为「已存在」而永远跳过。两个 marker 互不为前缀才安全。
+  insertOnce(
+    'src/components/messages/AssistantMessage.tsx',
+    'mobile-ui: turn cost entry import',
+    "import styles from './AssistantMessage.module.css'",
+    `
+// mobile-ui: turn cost entry import —— 移动端「本轮消耗额度」入口（桌面端返回 null）
+import { TurnCostButton } from '../../mobile/cost/TurnCostButton.js'`
+  )
+
+  insertOnce(
+    'src/components/messages/AssistantMessage.tsx',
+    'mobile-ui: turn cost entry jsx',
+    '{copyText ? <CopyButton text={copyText} /> : null}',
+    `{/* mobile-ui: turn cost entry jsx —— 移动端「本轮消耗额度」入口，排在复制按钮之前 */}
+            <TurnCostButton message={message} sessionId={sessionId} isLast={isLast} />
+            `,
+    'before'
   )
 }
 

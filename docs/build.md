@@ -128,7 +128,7 @@ pnpm accept           # 9. 用无头浏览器验收打包进 APK 的那份产物
 pnpm test:import      # 10. 合并导入的端到端测试（真实 IndexedDB）
 ```
 
-产物：`dist-apk/deep-chat-0.2.7-x64-release.apk`（约 5.8 MB）
+产物：`dist-apk/deep-chat-0.2.8-x64-release.apk`（约 5.8 MB）
 
 调试包把第 7 步换成 `pnpm android:debug`，产物名带 `-debug`。**debug 与 release 使用同一把
 发布密钥**（见 `android/app/build.gradle`），所以两者可以互相覆盖安装，不会出现
@@ -189,7 +189,7 @@ APK 走 Android 兼容层。详细步骤见 [install-harmony.md](./install-harmo
 
 ```powershell
 & "$env:ANDROID_HOME\platform-tools\adb.exe" devices
-& "$env:ANDROID_HOME\platform-tools\adb.exe" install -r dist-apk\deep-chat-0.2.7-x64-release.apk
+& "$env:ANDROID_HOME\platform-tools\adb.exe" install -r dist-apk\deep-chat-0.2.8-x64-release.apk
 ```
 
 `-r` 是覆盖安装、保留数据。**签名必须一致** —— 换签名只能先卸载，本地数据会全丢。
@@ -265,7 +265,7 @@ DN:      CN=Deep Chat, OU=Mobile, O=DeepChat, C=CN
 
 ```powershell
 & "$env:ANDROID_HOME\build-tools\36.0.0\apksigner.bat" verify --print-certs `
-  dist-apk\deep-chat-0.2.7-x64-release.apk
+  dist-apk\deep-chat-0.2.8-x64-release.apk
 ```
 
 `build-apk.mjs` 在 release 结束时自动跑这一步，并打印指纹。
@@ -286,7 +286,7 @@ DN:      CN=Deep Chat, OU=Mobile, O=DeepChat, C=CN
 > 导入链路的性能与内存（真实 32 MB 归档、分块原生桥、根因数据）单独记在
 > [`import-performance.md`](./import-performance.md)。
 
-### 5.1 壳层 / 功能补丁（上游 12 个文件，27 处）
+### 5.1 壳层 / 功能补丁（上游 14 个文件，30 处）
 
 | 文件 | 改了什么 | 为什么必须改 |
 | --- | --- | --- |
@@ -302,6 +302,7 @@ DN:      CN=Deep Chat, OU=Mobile, O=DeepChat, C=CN
 | `src/services/chat/history/zipReader.ts` | 中央目录解析结果按 `File` 缓存 | 一次导入原本解析 3 遍中央目录（677 条目 × 3），缓存后 1 遍 |
 | `src/components/chatInput/useVoiceInput.ts` | 录音失败时补一次原生引导 | 区分「永久拒绝」与普通失败，否则用户被卡在一条看不懂的 toast 上 |
 | `src/i18n/zh.ts` `en.ts` | 产品名 + 移动端文案 | 正式客户端不叫 demo；移动端官方文案见 spec §3 |
+| `src/components/messages/AssistantMessage.tsx` | 动作栏最左侧插入「本轮消耗」入口（两处：import + JSX） | 官方 App 的数据库图标在最后一条回答下方；组件内部按 `isMobile` 提前返回，桌面端零变化 |
 
 ### 5.2 移动端 UI 覆盖层
 
@@ -313,6 +314,7 @@ DN:      CN=Deep Chat, OU=Mobile, O=DeepChat, C=CN
 | 会话页 | `src/components/session/{MobileHeader,Welcome,SessionView}.tsx` + css | 移动端换成官方风格，桌面分支不动 |
 | 抽屉 | `src/components/sider/Sider.tsx` + `Sider.module.css` | 移动端抽屉换成搜索 + 分组列表 + 账户行 |
 | 新组件 | `web-patches/mobile/{common,chatinput,topbar,drawer}/` | 顶栏、输入框、附件面板、按住说话、搜索、图标、logo、tokens |
+| 本轮消耗 | `web-patches/mobile/cost/` | 数据库图标入口 + 底部费用面板；峰谷计价、每日抓官方价目、24h 缓存（见 [patches/cost-panel.md](../patches/cost-panel.md)） |
 
 **绝不能做的事**（做了就是返工）：
 
@@ -477,6 +479,7 @@ pnpm ui:preview    # 移动端 5 屏 + 桌面回归图（人眼对比 UI参考�
 pnpm verify        # 静态硬指标（不需要浏览器）
 pnpm accept        # 无头浏览器验收 APK 里的那份产物
 pnpm test:import   # 合并导入端到端（真实 IndexedDB）
+pnpm test:cost     # 峰谷计价与价目解析（纯函数，60 条断言）
 ```
 
 ### 9.1 `verify`：静态硬指标
@@ -503,8 +506,10 @@ pnpm test:import   # 合并导入端到端（真实 IndexedDB）
 | E 安全区 | `.frame` 锚点仍在、`--shell-inset-*` 是具体 px 而非 `env()` 原文 |
 | F 移动端 UI | 鲸鱼 logo、汉堡/朗读/新建对话、官方占位符、深度思考/智能搜索药丸、无 caveat、+ 打开附件面板（拍照/相册/文件）、麦克风切「按住说话」、抽屉搜索框与账户行 |
 | F2 原生导出 | 进度浮层可见；成功后显示 `Documents/DeepChat/deep-chat-export-<时间>.zip`；桥调用含 begin/append/finish；失败显示原因且 abort；点重试可重新导出 |
+| G 朗读开关 | 朗读中变品牌蓝 + 「停止朗读」，再点回到空闲 |
+| H 本轮消耗面板 | 种子会话（命中 1024 / 未命中 3568 / 输出 508，北京周五 20:00）→ 最后一条回答下方出现数据库图标 → 点开显示 `0.00562048 元`、三条用量与金额、「空闲时段」、上下文 0%；Esc 可关；重开面板不再抓价（价目每天只抓一次，缓存 `source=official`） |
 
-### 9.3 `test:import`：46 条断言 / 14 个场景
+### 9.3 `test:import`：63 条断言 / 19 个场景
 
 | 场景 | 验的东西 |
 | --- | --- |
@@ -529,7 +534,17 @@ pnpm test:import   # 合并导入端到端（真实 IndexedDB）
 
 三条命令失败时退出码为 1，可直接接 CI。
 
-### 9.4 手工验收（自动化覆盖不到的）
+### 9.4 `test:cost`：60 条断言
+
+把 `web-patches/mobile/cost/pricing.ts` 用上游 rspack 打成 IIFE，在无头 Chromium 里跑纯函数断言
+（找不到浏览器时退化为 Node 执行同一 bundle，并在输出里说明）。覆盖：
+
+- 官方截图那组数字：命中 1024 × 0.02 + 未命中 3568 × 1 + 输出 508 × 4 = `0.00562048`；
+- 峰谷边界 8 个（北京 08:59 / 09:00 / 11:59 / 12:00 / 13:59 / 14:00 / 17:59 / 18:00）、周末两个、法定假日一天；
+- 真实价目页 `.md` 片段解析出 6 个价格 + 1M 上下文；删掉价格行或改成非数字必须返回 `null`（不产生半张表）；
+- 金额/token/单价格式化、上下文占比封顶、缺字段与全 0 usage 的降级。
+
+### 9.5 手工验收（自动化覆盖不到的）
 
 装到真机后逐项过：
 

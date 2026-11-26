@@ -1,0 +1,324 @@
+/**
+ * 本轮消耗面板样式 —— web-patches/mobile/cost/TurnCostSheet.module.css
+ *
+ * 一份样式表同时服务两个文件：入口按钮（TurnCostButton.tsx）与底部面板
+ * （TurnCostSheet.tsx）。按钮只有 44×44 一个方块，为它单开一个 module 不值得，
+ * 而且两者共用同一套语义色，放在一起改深色主题时不会漏。
+ *
+ * 【关于语义变量】
+ * mobile.css 提供的是「一档文字灰 + 一档更淡的灰 + 一档填充」的 token，
+ * 官方成本面板还要区分：主文字 / 次要说明 / 页脚更淡的元信息 / 卡片底 / 分隔线。
+ * 所以这里在面板作用域内做一层别名（--tc-*），值全部指向已有 token：
+ * 深浅色由 mobile.css 对 --m-* 的覆盖自动跟随，本文件里不出现任何 #fff / #000。
+ * 唯一的字面量是遮罩 rgba(0,0,0,.4)——规格明确要求，且遮罩本来就不该随主题变浅。
+ */
+
+/* ── 入口按钮（渲染在消息动作栏里，不在面板作用域内，直接用 token）────────── */
+.trigger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  /* 44×44 是触控下限；上下 -8px 抵消「图标 16 + 触控区 44」比相邻 28px 图标多出的高度，
+     否则整条动作栏会被这一个按钮撑高，与官方截图的紧凑行距不一致。 */
+  width: 44px;
+  height: 44px;
+  margin: -8px 0;
+  padding: 0;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  /* 官方截图里这个图标是动作栏的「次要」灰，不是主文字色 */
+  color: var(--m-text-secondary, currentColor);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: color 150ms var(--m-ease), background 150ms var(--m-ease);
+}
+
+.trigger:active {
+  background: var(--m-fill, transparent);
+  color: var(--m-text, currentColor);
+}
+
+/* ── 面板 ──────────────────────────────────────────────────────────────── */
+.sheetRoot {
+  --tc-surface: var(--m-composer-bg);
+  --tc-card: var(--m-fill-strong);
+  --tc-chip: var(--m-fill);
+  --tc-text: var(--m-text);
+  --tc-text-2: var(--m-text-secondary);
+  --tc-text-3: var(--m-text-placeholder);
+  --tc-line: var(--m-line);
+  /* 规格给定值；遮罩不参与深浅色主题 */
+  --tc-mask: rgba(0, 0, 0, 0.4);
+
+  position: fixed;
+  inset: 0;
+  z-index: 1100; /* 高于 Menu(900) / Modal(1000)，低于 Toast(2000) */
+}
+
+.mask {
+  position: absolute;
+  inset: 0;
+  background: var(--tc-mask);
+  opacity: 0;
+  transition: opacity 150ms var(--m-ease);
+}
+
+.sheet {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  box-sizing: border-box;
+  max-height: 85vh;
+  padding: 12px 20px max(16px, env(safe-area-inset-bottom));
+  border-radius: 20px 20px 0 0;
+  background: var(--tc-surface);
+  color: var(--tc-text);
+  overflow-y: auto;
+  /* 头行/副标题都是 nowrap：横向绝不能出现滚动条，宁可让标题出省略号 */
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  /* 位移用 transform 而不是 height：手机上是合成层动画，不触发重排 */
+  transform: translateY(100%);
+  transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  will-change: transform;
+}
+
+/* 打开态：遮罩淡入、面板滑入（各自的时长见上） */
+.rootOpen .mask {
+  opacity: 1;
+}
+
+.rootOpen .sheet {
+  transform: none;
+}
+
+/* 手指拖动期间必须关掉过渡，否则面板会追着手指「飘」 */
+.dragging .sheet {
+  transition: none;
+}
+
+/* 拖拽把手：36×4 的药丸，顶部留 12px（规格：12px / 36px） */
+.handleWrap {
+  display: flex;
+  justify-content: center;
+  padding: 0 0 10px;
+}
+
+.handle {
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--tc-line);
+}
+
+/*
+ * 头行必须永远是**一行**（官方截图：图标 + 标题 + 28px 合计同一行）。
+ * 所以这里不换行、不让子项撑破，而是让标题在极限情况下自己出省略号：
+ * 宁可标题截断，也不能把合计挤到第二行（实测 393 下挤成两行，360 下更糟）。
+ * 标题行高与合计同为 32px，两行盒高度一致 → 两者的 top 区间完全重合。
+ */
+.head {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 12px;
+}
+
+.headMain {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 8px;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+.headIcon {
+  display: flex;
+  flex-shrink: 0;
+  color: var(--tc-text-2);
+}
+
+.headTitle {
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 32px;
+  color: var(--tc-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 窄屏（360）把标题降 1px，让「图标 + 标题 + 合计」仍能一行放下 */
+@media (max-width: 380px) {
+  .headTitle {
+    font-size: 16px;
+  }
+}
+
+.headTotal {
+  display: flex;
+  align-items: baseline;
+  /* 官方数字与「元」之间约半个字宽；3px 太贴 */
+  gap: 4px;
+  margin-left: auto;
+  flex-shrink: 0;
+  /* 【为什么要写死 32px】baseline 对齐会把 16px「元」的行盒整体下移 4px，
+     flex 容器的交叉尺寸随之变成 36px —— 头行就被撑成「一行半」。盒高钉死 32px 后
+     基线仍然对齐（视觉不变），头行高度与标题严格一致。 */
+  height: 32px;
+}
+
+/* 合计数字：等宽数字 + 不许换行，避免每次打开面板数字宽度跳动 */
+.totalNum {
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 32px;
+  letter-spacing: -0.4px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* 单位跟数字同一 baseline：16px 才和 28px 数字的比例协调（官方截图约 0.57 倍） */
+.totalUnit {
+  font-size: 16px;
+  line-height: 32px;
+  color: var(--tc-text-2);
+}
+
+/* 副标题行：估价口径 + `·` + 模型标签，同样必须一行 */
+.subtitle {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--tc-text-2);
+}
+
+.subtitleHint {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.subtitleDot {
+  flex-shrink: 0;
+}
+
+.chip {
+  flex-shrink: 0;
+  max-width: 45%;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: var(--tc-chip);
+  color: var(--tc-text-2);
+  font-size: 11px;
+  line-height: 14px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* 计价卡片：一组一分隔线，组内三行（单价 / 用量 / 金额） */
+.card {
+  margin-top: 16px;
+  padding: 0 16px;
+  border-radius: 12px;
+  background: var(--tc-card);
+}
+
+.group {
+  display: grid;
+  grid-template-columns: 88px 1fr;
+  gap: 8px;
+  padding: 14px 0;
+}
+
+.group + .group {
+  border-top: 1px solid var(--tc-line);
+}
+
+.groupLabel {
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--tc-text);
+}
+
+.groupSub {
+  margin-top: 2px;
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--tc-text-3);
+}
+
+.rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.rowLabel {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--tc-text-2);
+}
+
+.rowValue {
+  margin-left: auto;
+  color: var(--tc-text);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.footer {
+  margin-top: 14px;
+  text-align: center;
+  color: var(--tc-text-3);
+  font-size: 12px;
+  line-height: 17px;
+}
+
+/* 页脚第二行兼「刷新价格」按钮：整行可点，按压时才提亮，避免看起来像链接 */
+.footerMeta {
+  display: block;
+  width: 100%;
+  margin-top: 2px;
+  padding: 2px 0;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  line-height: 17px;
+  color: var(--tc-text-3);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.footerMeta:active {
+  color: var(--tc-text-2);
+}
+
+/* 系统开了「减弱动态效果」时不做位移动画，直接切换 */
+@media (prefers-reduced-motion: reduce) {
+  .mask,
+  .sheet {
+    transition-duration: 1ms;
+  }
+}
